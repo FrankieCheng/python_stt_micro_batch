@@ -1,7 +1,7 @@
-#  Speech-to-Text GRPC to mock the stream requests/responses for users to transcript microphone.
+#  Speech-to-Text GRPC to mock the stream requests/responses for users to transcript microphone/file stream.
 Bi-directional streaming speech-to-text (STT or ASR) to mock the stream requests from microphone/file stream, and response the transcript contents to end users.
 
-It is recommended to use Linux to deploy the server can solve lots of compatibility problems.
+It is recommended to use Linux to deploy the server can avoid lots of compatibility issues.
 
 # Clone the repo
 Clone the repo from Git.
