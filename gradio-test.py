@@ -38,7 +38,7 @@ def start_recording(audio_filepath):
     global transcription_server
     global PROJECT_ID
     global LOCATION
-    transcription_server = TranscriptionServer(project_id=PROJECT_ID, location=LOCATION, recognizer="test-demo")
+    transcription_server = TranscriptionServer(project_id=PROJECT_ID, location=LOCATION, recognizer="-")
 
 def stop_recording(self, audio_filepath):
     print("stop recording.")
