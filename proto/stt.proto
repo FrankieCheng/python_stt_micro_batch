@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package SpeechToText;
+
+option java_package = "com.google.asr.stt";
+
+// The Listener service definition.
+service Listener {
+  rpc DoSpeechToText (stream SpeechChunkRequest) returns (stream TranscriptStreamResponse) {}
+}
+
+// speech recognition config (fields are optional by default in proto3)
+message RecognitionConfig {
+	repeated string language_codes = 1;
+}
+
+message StreamingConfig {
+  RecognitionConfig config = 1;
+}
+
+message StreamingRecognizeRequest {
+  StreamingConfig streaming_config = 1;
+}
+
+message AudioRequest {
+	bytes audio = 1;
+}
+
+// audio chunk
+message SpeechChunkRequest {
+	AudioRequest content = 1;
+  StreamingRecognizeRequest config = 2;
+}
+
+// alternative.
+message Alternative {
+  string transcript = 1;
+	float confidence = 2;
+}
+
+// results in the stream.
+message TranscriptStreamResult {
+  int32 result_end_offset = 1;
+  bool is_final = 2;
+  repeated Alternative alternatives = 3;
+}
+
+// whole response
+message TranscriptStreamResponse {
+  int32 speech_event_offset = 1;
+  repeated TranscriptStreamResult results = 2;
+}
