@@ -155,8 +155,9 @@ class TranscriptionServer:
 
         #used for debug only to check the wav files.
         #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
-        if not has_new_speech:
-            return self.recv_audio_output([{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}])
+        #TODO: no speech in current chunk has some issues.
+        #if not has_new_speech:
+        #    return self.recv_audio_output([{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}])
         logger.info("current all segments logging check.")
         logger.info(current_all_segments)
 
@@ -208,8 +209,9 @@ class TranscriptionServer:
                     if None != transcript_segment:
                         transcript_segment['transcript'] = transcript_json_result
         #logger.info(current_transcript_segments)
-        if len(current_transcript_segments) == 0:
-            current_transcript_segments = [{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}]
+        #TODO: should resolve the segments == 0 issues.
+        #if len(current_transcript_segments) == 0:
+        #    current_transcript_segments = [{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}]
         return self.recv_audio_output(current_transcript_segments)
 
     def find_first_no_transcript_segment(self, segments):

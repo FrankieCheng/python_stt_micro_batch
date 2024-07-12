@@ -6,11 +6,17 @@ import stt_pb2_grpc as stt__pb2__grpc
 import grpc
 import pyaudio
 import argparse
+import sys
+import re
 
 # Audio recording parameters
 SAMPLING_RATE = 16000
 CHUNK = int(SAMPLING_RATE / 2)  # 500ms
 _TIMEOUT_SECONDS_STREAM = 1000 	# timeout for streaming must be for entire stream
+
+RED = "\033[0;31m"
+GREEN = "\033[0;32m"
+YELLOW = "\033[0;33m"
 
 class MicrophoneStream:
     """Opens a recording stream as a generator yielding the audio chunks."""
@@ -111,7 +117,6 @@ class MicrophoneStream:
             yield b"".join(data)
 
 def build_request_body(chunk, language_code):
-    print(f"sssxxxx {type(chunk)}")
     return stt__pb2.SpeechChunkRequest(
         content = stt__pb2.AudioRequest(audio = chunk),
         config = stt__pb2.StreamingRecognizeRequest(
@@ -122,6 +127,58 @@ def build_request_body(chunk, language_code):
             )
         )
     )
+
+def listen_print_loop(responses: object, stream: object) -> None:
+    """Iterates through server responses and prints them.
+
+    The responses passed is a generator that will block until a response
+    is provided by the server.
+
+    Each response may contain multiple results, and each result may contain
+    multiple alternatives; for details, see https://goo.gl/tjCPAU.  Here we
+    print only the transcription for the top alternative of the top result.
+
+    In this case, responses are provided for interim results as well. If the
+    response is an interim one, print a line feed at the end of it, to allow
+    the next result to overwrite it, until the response is a final one. For the
+    final one, print a newline to preserve the finalized transcription.
+
+    Arg:
+        responses: The responses returned from the API.
+        stream: The audio stream to be processed.
+    """
+    for response in responses:
+
+        if not response.results:
+            continue
+
+        result = response.results[0]
+
+        if not result.alternatives:
+            continue
+
+        transcript = result.alternatives[0].transcript
+
+        if result.is_final:
+            sys.stdout.write(GREEN)
+            sys.stdout.write("\033[K")
+            sys.stdout.write(": " + transcript + "\n")
+
+            stream.last_transcript_was_final = True
+
+            # Exit recognition if any of the transcribed phrases could be
+            # one of our keywords.
+            if re.search(r"\b(exit|quit)\b", transcript, re.I):
+                sys.stdout.write(YELLOW)
+                sys.stdout.write("Exiting...\n")
+                stream.closed = True
+                break
+        else:
+            sys.stdout.write(RED)
+            sys.stdout.write("\033[K")
+            sys.stdout.write(": " + transcript + "\r")
+
+            stream.last_transcript_was_final = False
 
 def main() -> None:
     """Transcribe speech from audio file."""
@@ -142,8 +199,7 @@ def main() -> None:
                 yield build_request_body(chunk=item, language_code = args.language)
         responses = service.DoSpeechToText(request_stream(), _TIMEOUT_SECONDS_STREAM)
         
-        for response in responses:
-            print(response)
+        listen_print_loop(responses, stream)
 
 if __name__ == "__main__":
     main()
