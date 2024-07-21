@@ -31,11 +31,9 @@ class Listener(stt__pb2__grpc.ListenerServicer):
 			# temp use the first language code as the target language.
 			language_code = requests.config.streaming_config.config.language_codes[0]
 			transcript_result = transcription_server.recv_audio_bytes(chunk, language_code)
-			logger.info(transcript_result)
+			#logger.info(transcript_result)
 			if None != transcript_result:
 				yield transcript_result
-			else:
-				yield None
 
 def serve(port, project, location):
 	server = grpc.server(futures.ThreadPoolExecutor(max_workers=20))

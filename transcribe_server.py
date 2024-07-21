@@ -16,7 +16,7 @@ import base64
 from datetime import datetime
 import io
 import torch
-from vad import VADIterator
+from vad import (VADIterator,read_audio)
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +55,16 @@ class TranscriptionServer:
         self.all_transcriptions = []
         self.speech_threshold = 0.5
         self.transcript_stream_results = []
-        
+
+    # used for .wav files input
+    def recv_audio(self,
+                   new_chunk, language_code):
+        # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
+        if new_chunk == None:
+            return ""
+        current_chunks = read_audio(new_chunk, sampling_rate=self.SAMPLING_RATE)
+        return self.process_new_chunks(current_chunks, language_code)
+
     # used for bytes input, and only float32 is supported.
     def recv_audio_bytes(self,
                    new_chunk, language_code):
@@ -294,7 +303,7 @@ class TranscriptionServer:
         language):
         prompt_template = """<Transcription Instructions>
 1.Faithful to Original: Accurately transcribe the audio content, including all spoken words.
-2.Formal Language: Use standard written {language}, avoid colloquial expressions.
+2.Formal Language: Use standard {language}.
 3.Remove all Onomatopoeia and Interjections: Such as "um," "ah," "oh," "啊", "삐", '哔', unless crucial for understanding the meaning.
 4.Eliminate Mimetic Words: Such as "huālā lā" (sound of water), "dī dā dī dā" (ticking clock), remove them directly.
 5.Attention to Proper Nouns and Terminology: Double-check for accuracy.

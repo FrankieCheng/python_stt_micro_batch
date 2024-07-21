@@ -1,5 +1,6 @@
 
 import torch
+import torchaudio
 
 def init_jit_model(model_path: str,
                    device=torch.device('cpu')):
@@ -96,3 +97,32 @@ class VADIterator:
                 return {'end': int(speech_end) if not return_seconds else round(speech_end / self.sampling_rate, 1)}
 
         return None
+
+
+def read_audio(path: str,
+               sampling_rate: int = 16000):
+
+    sox_backends = set(['sox', 'sox_io'])
+    audio_backends = torchaudio.list_audio_backends()
+
+    if len(sox_backends.intersection(audio_backends)) > 0:
+        effects = [
+            ['channels', '1'],
+            ['rate', str(sampling_rate)]
+        ]
+
+        wav, sr = torchaudio.sox_effects.apply_effects_file(path, effects=effects)
+    else:
+        wav, sr = torchaudio.load(path)
+
+        if wav.size(0) > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+
+        if sr != sampling_rate:
+            transform = torchaudio.transforms.Resample(orig_freq=sr,
+                                                       new_freq=sampling_rate)
+            wav = transform(wav)
+            sr = sampling_rate
+
+    assert sr == sampling_rate
+    return wav.squeeze(0)
