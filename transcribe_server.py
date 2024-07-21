@@ -16,9 +16,7 @@ import base64
 from datetime import datetime
 import io
 import torch
-from utils_vad import (
- read_audio,
- VADIterator)
+from vad import VADIterator
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
@@ -57,29 +55,20 @@ class TranscriptionServer:
         self.all_transcriptions = []
         self.speech_threshold = 0.5
         self.transcript_stream_results = []
-    
-    # used for .wav files input
-    def recv_audio(self,
-                   new_chunk, language_code):
-        # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
-        if new_chunk == None:
-            return ""
-        current_chunks = read_audio(new_chunk, sampling_rate=self.SAMPLING_RATE)
-        return self.process_new_chunks(current_chunks, language_code)
         
     # used for bytes input, and only float32 is supported.
     def recv_audio_bytes(self,
                    new_chunk, language_code):
-        try:
+        #try:
             logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
             #read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
             #logger.info(audio_array)
             current_chunks = torch.Tensor(audio_array)
             return self.process_new_chunks(current_chunks, language_code)
-        except Exception as e:
-            print(e)
-            return None
+        # except Exception as e:
+        #     print(e)
+        #     return None
 
     # reconstructed output method
     def recv_audio_output(self, current_transcript_segments):
@@ -156,8 +145,8 @@ class TranscriptionServer:
         #used for debug only to check the wav files.
         #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
         #TODO: no speech in current chunk has some issues.
-        #if not has_new_speech:
-        #    return self.recv_audio_output([{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}])
+        if not has_new_speech:
+            return None
         logger.info("current all segments logging check.")
         logger.info(current_all_segments)
 
@@ -210,8 +199,8 @@ class TranscriptionServer:
                         transcript_segment['transcript'] = transcript_json_result
         #logger.info(current_transcript_segments)
         #TODO: should resolve the segments == 0 issues.
-        #if len(current_transcript_segments) == 0:
-        #    current_transcript_segments = [{'start':current_last_start, 'immediate':len(current_all_chunks), 'transcript':''}]
+        if len(current_transcript_segments) == 0:
+            return None
         return self.recv_audio_output(current_transcript_segments)
 
     def find_first_no_transcript_segment(self, segments):
@@ -225,11 +214,11 @@ class TranscriptionServer:
     def cleanup(self):
         self.all_chunks = []
             
-    # save tensor to wav.
-    def save_tensor_to_wav(self, tensor, sample_rate, output_file):
-        if tensor.ndim == 1:
-            tensor = tensor.unsqueeze(0)
-        torchaudio.save(output_file, tensor, sample_rate, bits_per_sample=16)
+    # # save tensor to wav.
+    # def save_tensor_to_wav(self, tensor, sample_rate, output_file):
+    #     if tensor.ndim == 1:
+    #         tensor = tensor.unsqueeze(0)
+    #     torchaudio.save(output_file, tensor, sample_rate, bits_per_sample=16)
 
     # covert tensor object to base64.
     def tensor_to_base64(self, tensor, sample_rate):
@@ -243,7 +232,6 @@ class TranscriptionServer:
         """
         # Create a BytesIO Object to store audio data.
         audio_buffer = io.BytesIO()
-
         if tensor.ndim == 1:
             tensor = tensor.unsqueeze(0)
         
@@ -325,15 +313,15 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
 """
         generation_config = {
             "max_output_tokens": 8192,
-            "temperature": 0,
+            "temperature": 0.1,
             "top_p": 0.95,
         }
 
         safety_settings = {
-            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
         }
 
         start_time = (int)(datetime.now().timestamp() * 1000)
@@ -341,7 +329,7 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
         model = GenerativeModel(
             "gemini-1.5-pro-001",
         )
-        prompt_contents = [Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64)), prompt_template.format(language=language)]
+        prompt_contents = [Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64)), prompt_template.format(language=language)]
         response = model.generate_content(
             prompt_contents,
             generation_config=generation_config,
