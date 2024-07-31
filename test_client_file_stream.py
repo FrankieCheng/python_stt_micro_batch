@@ -5,8 +5,7 @@ import time
 import stt_pb2_grpc as stt__pb2__grpc
 import grpc
 import argparse
-from utils_vad import (
- read_audio)
+from vad import (VADIterator,read_audio)
 
 SAMPLING_RATE = 16000
 _TIMEOUT_SECONDS_STREAM = 1000 	# timeout for streaming must be for entire stream
