@@ -68,16 +68,16 @@ class TranscriptionServer:
     # used for bytes input, and only float32 is supported.
     def recv_audio_bytes(self,
                    new_chunk, language_code):
-        #try:
+        try:
             logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
             #read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
             #logger.info(audio_array)
             current_chunks = torch.Tensor(audio_array)
             return self.process_new_chunks(current_chunks, language_code)
-        # except Exception as e:
-        #     print(e)
-        #     return None
+        except Exception as e:
+             print(e)
+             return None
 
     # reconstructed output method
     def recv_audio_output(self, current_transcript_segments):
