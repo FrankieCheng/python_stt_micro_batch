@@ -27,7 +27,7 @@ python3 stt_server.py -p {port} -project {PROJECT_ID} -location {location}
 
 ## Stream from recorded file
 ```
-python3 test_client_file_stream.py -p {port} -project {PROJECT_ID} -location {location} -l zh-Hans-CN -in temp-test-chinese.wav
+python3 test_client_file_stream.py -p {port} -l zh-Hans-CN -in temp-test-chinese.wav
 ```
 
 ## Stream from microphone
