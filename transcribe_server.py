@@ -17,6 +17,13 @@ from datetime import datetime
 import io
 import torch
 from vad import (VADIterator,read_audio)
+from utils_vad import (get_speech_timestamps)
+
+# wav = read_audio("vad-test.wav", 16000)
+# model1 = torch.jit.load('silero_vad/silero_vad.jit')
+
+# ts = get_speech_timestamps(wav, model1, 0.5)
+# print (ts)
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +46,7 @@ LANGUAGE_CODE_DIC = {
 class TranscriptionServer:
     SAMPLING_RATE = 16000
     WINDOW_SIZE_SAMPLES = 1536
+    SPEECH_THRESHOLD = 0.5
 
     def __init__(self, project_id, location, recognizer):
         torch.set_num_threads(1)
@@ -48,18 +56,19 @@ class TranscriptionServer:
         # we will use model temp to do some temp job, for example speech detect/segment the audios and so on.
         self.model_temp = torch.jit.load('silero_vad/silero_vad.jit')
         self.all_chunks = torch.tensor([])
-        self.vad_iterator = VADIterator(self.model, threshold=0.5)
+        self.speech_threshold = 0.5
+        self.vad_iterator = VADIterator(self.model, self.speech_threshold)
         self.recognizer = recognizer
         self.last_end = 0
         self.last_start = 0
         self.all_transcriptions = []
-        self.speech_threshold = 0.5
         self.transcript_stream_results = []
 
     # used for .wav files input
     def recv_audio(self,
                    new_chunk, language_code):
         # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
+        logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
         if new_chunk == None:
             return ""
         current_chunks = read_audio(new_chunk, sampling_rate=self.SAMPLING_RATE)
@@ -147,14 +156,14 @@ class TranscriptionServer:
                 current_all_segments.append({'start':current_last_start, 'end':speech_dict['end']})
                 current_last_start = speech_dict['end']
                 self.last_start = speech_dict['end']
-
+            elif loop_end_index == len(current_all_chunks):
+                current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
         logger.info(f"--------before transcript begins. is_speech={has_new_speech}")
         #if no new speech detected, just return the transcription, otherwise, we should process those.
 
         #used for debug only to check the wav files.
         #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
-        #TODO: no speech in current chunk has some issues.
-        if not has_new_speech:
+        if not (current_all_segments and ('end' in speech_dict for speech_dict in current_all_segments)) and not has_new_speech:
             return None
         logger.info("current all segments logging check.")
         logger.info(current_all_segments)
@@ -304,7 +313,7 @@ class TranscriptionServer:
         prompt_template = """<Transcription Instructions>
 1.Faithful to Original: Accurately transcribe the audio content, including all spoken words.
 2.Formal Language: Use standard {language}.
-3.Remove all Onomatopoeia and Interjections: Such as "um," "ah," "oh," "啊", "삐", '哔', unless crucial for understanding the meaning.
+3.Don't output all Onomatopoeia and Interjections: Such as "um," "ah," "oh," "啊", "삐", '哔', unless crucial for understanding the meaning.
 4.Eliminate Mimetic Words: Such as "huālā lā" (sound of water), "dī dā dī dā" (ticking clock), remove them directly.
 5.Attention to Proper Nouns and Terminology: Double-check for accuracy.
 6.No Speech Detected: If no speech is detected in a segment, leave the transcription output blank for that segment.
@@ -327,16 +336,17 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
         }
 
         safety_settings = {
-            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
-            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
         }
 
         start_time = (int)(datetime.now().timestamp() * 1000)
         vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
         model = GenerativeModel(
-            "gemini-1.5-pro-001",
+            "gemini-1.5-flash-001",
+            system_instruction=["""Do not recite the information directly from training."""],
         )
         prompt_contents = [Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64)), prompt_template.format(language=language)]
         response = model.generate_content(
