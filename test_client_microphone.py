@@ -8,7 +8,6 @@ import pyaudio
 import argparse
 import sys
 import re
-from concurrent.futures import ThreadPoolExecutor
 
 # Audio recording parameters
 SAMPLING_RATE = 16000
@@ -149,6 +148,8 @@ def listen_print_loop(responses: object, stream: object) -> None:
         stream: The audio stream to be processed.
     """
     for response in responses:
+        if response is None:
+            continue
 
         if not response.results:
             continue
@@ -192,7 +193,7 @@ def main() -> None:
     args = parser.parse_args()
 
     channel = grpc.insecure_channel(f"{args.ipaddr}:{args.port}")
-    #print(type(channel))
+    print(type(channel))
     service = stt__pb2__grpc.ListenerStub(channel)
     with MicrophoneStream(SAMPLING_RATE, CHUNK) as stream:
         def request_stream():
@@ -200,10 +201,7 @@ def main() -> None:
                 yield build_request_body(chunk=item, language_code = args.language)
         responses = service.DoSpeechToText(request_stream(), _TIMEOUT_SECONDS_STREAM)
         
-        executor = ThreadPoolExecutor()
-        _consumer_future = executor.submit(
-            listen_print_loop, responses, stream
-        )
+        listen_print_loop(responses, stream)
 
 if __name__ == "__main__":
     main()
