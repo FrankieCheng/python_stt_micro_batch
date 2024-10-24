@@ -7,6 +7,7 @@ from concurrent.futures import as_completed
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 import vertexai.preview.generative_models as generative_models
+import asyncio
 
 import stt_pb2 as stt__pb2
 import logging
@@ -65,17 +66,19 @@ class TranscriptionServer:
         self.transcript_stream_results = []
 
     # used for .wav files input
-    def recv_audio(self,
+    async def recv_audio(self,
                    new_chunk, language_code):
         # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
         logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
         if new_chunk == None:
             return ""
         current_chunks = read_audio(new_chunk, sampling_rate=self.SAMPLING_RATE)
-        return self.process_new_chunks(current_chunks, language_code)
+        task = asyncio.create_task(self.process_new_chunks(current_chunks, language_code))
+        result = await task
+        return result
 
     # used for bytes input, and only float32 is supported.
-    def recv_audio_bytes(self,
+    async def recv_audio_bytes(self,
                    new_chunk, language_code):
         try:
             logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
@@ -83,7 +86,10 @@ class TranscriptionServer:
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
             #logger.info(audio_array)
             current_chunks = torch.Tensor(audio_array)
-            return self.process_new_chunks(current_chunks, language_code)
+
+            task = asyncio.create_task(self.process_new_chunks(current_chunks, language_code))
+            result = await task
+            return result
         except Exception as e:
              print(e)
              return None
@@ -110,7 +116,7 @@ class TranscriptionServer:
             return None
 
     # process new chunks
-    def process_new_chunks(self,
+    async def process_new_chunks(self,
                    current_chunks, language_code):
         """
         Receive audio chunks from a client in an infinite loop.
@@ -205,16 +211,12 @@ class TranscriptionServer:
             torch_chunks = current_all_chunks[current_start_index: current_end_index]
             transcripted_base64_content = self.tensor_to_base64(torch_chunks, self.SAMPLING_RATE)
         
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                # change the method transcribe/transcribe_by_gemini, and temp used transcribe_by_gemini instead of chirp_2.
-                #transcribe_thread_submit = executor.submit(self.transcribe, transcripted_base64_content, language_code)
-                transcribe_thread_submit = executor.submit(self.transcribe_by_gemini, transcripted_base64_content, LANGUAGE_CODE_DIC[language_code])
-                for future in as_completed([transcribe_thread_submit]):
-                    transcript_json_result = future.result()
-                    
-                    transcript_segment = self.find_first_no_transcript_segment(current_transcript_segments)
-                    if None != transcript_segment:
-                        transcript_segment['transcript'] = transcript_json_result
+            # change the method transcribe/transcribe_by_gemini, and temp used transcribe_by_gemini instead of chirp_2.
+            #transcribe_thread_submit = self.transcribe(transcripted_base64_content, language_code)
+            transcript_json_result = await self.transcribe_by_gemini(transcripted_base64_content, LANGUAGE_CODE_DIC[language_code])
+            transcript_segment = self.find_first_no_transcript_segment(current_transcript_segments)
+            if None != transcript_segment:
+                transcript_segment['transcript'] = transcript_json_result
         #logger.info(current_transcript_segments)
         #TODO: should resolve the segments == 0 issues.
         if len(current_transcript_segments) == 0:
@@ -263,7 +265,7 @@ class TranscriptionServer:
         return base64_string
 
     # do transcribe use Chirp_2
-    def transcribe (
+    async def transcribe (
         self,
         base64_data,
         language_code:str
@@ -292,7 +294,7 @@ class TranscriptionServer:
         )
 
         # Get the recognition results
-        response = client.recognize(request=audio_request)
+        response = await client.recognize(request=audio_request)
 
         request_end_time = (int)(datetime.now().timestamp() * 1000)
         response_time = request_end_time - start_time
@@ -308,7 +310,7 @@ class TranscriptionServer:
         return ""
     
     # transcribe by gemini
-    def transcribe_by_gemini(self, audio_base64,
+    async def transcribe_by_gemini(self, audio_base64,
         language):
         prompt_template = """<Transcription Instructions>
 1.Faithful to Original: Accurately transcribe the audio content, including all spoken words.
@@ -330,7 +332,7 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
 </Additional Notes>
 """
         generation_config = {
-            "max_output_tokens": 8192,
+            "max_output_tokens": 256,
             "temperature": 0.1,
             "top_p": 0.95,
         }
@@ -345,22 +347,33 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
         start_time = (int)(datetime.now().timestamp() * 1000)
         vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
         model = GenerativeModel(
-            "gemini-1.5-flash-001",
+            "gemini-1.5-flash-002",
             system_instruction=["""Do not recite the information directly from training."""],
         )
         prompt_contents = [Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64)), prompt_template.format(language=language)]
-        response = model.generate_content(
-            prompt_contents,
-            generation_config=generation_config,
-            safety_settings=safety_settings,
-            stream=False,
-        )
 
+        loop = asyncio.get_running_loop() 
+        response_task = await loop.run_in_executor(
+            None,  # Use the default executor
+            self.call_gemini,
+            prompt_contents,
+            generation_config,
+            safety_settings,
+            model,
+        )
+        response = await response_task
         end_time = (int)(datetime.now().timestamp() * 1000)
         gemini_used_time = end_time - start_time
         logger.info(f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={response.text}")
         return self.process_ununsed(response.text)
 
+    async def call_gemini (self, prompt_contents, generation_config, safety_settings, model):
+        return model.generate_content(
+            prompt_contents,
+            generation_config=generation_config,
+            safety_settings=safety_settings,
+            stream=False,
+        )
     #process the unused, only processed chinese/english now.
     def process_ununsed(self, txt):
         txt = txt.replace("\n", "").replace("`", "").replace("삐", "")
