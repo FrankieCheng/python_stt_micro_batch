@@ -4,6 +4,7 @@ import argparse
 import uuid
 import pylru
 import logging
+import asyncio
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
@@ -13,8 +14,12 @@ CACHE_SIZE = 100
 transcription_server_cache = pylru.lrucache(CACHE_SIZE)
 transcription_result_cache = pylru.lrucache(CACHE_SIZE)
 
-def transcribe_chunks(uuid_value, new_chunk, source_language="Chinese (Simplified, China)"):
-    transcript_stream_response = transcription_server_cache[uuid_value].recv_audio(new_chunk=new_chunk, language_code=language_mappings[source_language]);
+async def transcribe_chunks_async(uuid_value, new_chunk, source_language="Chinese (Simplified, China)"):
+    transcript_result_task = asyncio.create_task(
+                transcription_server_cache[uuid_value].recv_audio(new_chunk=new_chunk,
+                                                                                   language_code=language_mappings[
+                                                                                       source_language]))
+    transcript_stream_response = await transcript_result_task
     history_transcript_results = transcription_result_cache[uuid_value] if uuid_value in transcription_result_cache else []
     if len(history_transcript_results) > 0 and not history_transcript_results[len(history_transcript_results)-1].is_final:
         history_transcript_results = history_transcript_results[0:len(history_transcript_results)-1]
@@ -30,12 +35,14 @@ def transcribe_chunks(uuid_value, new_chunk, source_language="Chinese (Simplifie
         if result.alternatives and result.alternatives[0].transcript:
             current_transcript = current_transcript + result.alternatives[0].transcript + ("\n" if result.is_final else "")
 
-    return uuid_value, current_transcript
+    yield uuid_value, current_transcript
+
 
 def generate_uuid():
     uuid_value = str(uuid.uuid4())
     print(f"generate uuid = {uuid_value}")
     return uuid_value
+
 
 language_codes = [
     "en-US",  # English (United States)
@@ -107,7 +114,7 @@ with gr.Blocks() as demo:
     #uuid_textbox = gr.Textbox(lines=10, label="uuid", visible=False, value="")
     stats = gr.State(value="")
     app = gr.Interface(
-        fn = transcribe_chunks, 
+        fn = transcribe_chunks_async, 
         title="Micro-Batch Transcription For STT with Gemini/Chirp_2",
         description="Please select the source language first, then speak and click the \"Transcribe\"button.",
         inputs = [

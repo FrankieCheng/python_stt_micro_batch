@@ -17,6 +17,7 @@ import base64
 from datetime import datetime
 import io
 import torch
+import json
 from vad import (VADIterator,read_audio)
 from utils_vad import (get_speech_timestamps)
 
@@ -312,29 +313,52 @@ class TranscriptionServer:
     # transcribe by gemini
     async def transcribe_by_gemini(self, audio_base64,
         language):
-        prompt_template = """<Transcription Instructions>
-1.Faithful to Original: Accurately transcribe the audio content, including all spoken words.
-2.Formal Language: Use standard {language}.
-3.Don't output all Onomatopoeia and Interjections: Such as "um," "ah," "oh," "啊", "삐", '哔', unless crucial for understanding the meaning.
-4.Eliminate Mimetic Words: Such as "huālā lā" (sound of water), "dī dā dī dā" (ticking clock), remove them directly.
-5.Attention to Proper Nouns and Terminology: Double-check for accuracy.
-6.No Speech Detected: If no speech is detected in a segment, leave the transcription output blank for that segment.
-7.If the audio file or a link to the audio file is not provided, output NULL instead of asking input.
-8.Incomplete Sentences: If the audio contains incomplete sentences or phrases, transcribe what is heard without adding words or trying to complete the sentence.
-</Transcription Instructions>
-<Example>
-Original Audio: "Uh... well, I just heard a 'bang,' it seems like something fell down, oh, I hope it's not the vase?" (followed by 10 seconds of silence)
-Transcribed Text: "I just heard a sound, it seems like something fell down, I hope it's not the vase?" (blank space for the silent segment)
-</Example>
-<Additional Notes>
-Punctuation: Use punctuation correctly based on pauses and intonation.
-Special Cases: If encountering difficult content or no audio/content/input, please output blank or NULL.
-</Additional Notes>
+        prompt_template = """You are a highly skilled AI assistant specializing in accurate transcription. Your task is to faithfully transcribe the audio to {language}
+**Here's your detailed workflow:**
+1. **Language Identification:** Carefully analyze the audio to determine the spoken language ({language}).
+2. **Transcription:** Generate a verbatim transcription of the audio in {language}.
+- Only include spoken words.
+- Preserve the original language text if you hear foreign nouns or entities. For example, place names and celebrity names.
+3. **Polish Transcription:**
+Based on the results you got from Transcription, do tiny modification. Below are some requirements
+- Start from the Transcription you got in step 2
+- Keep the content as much as possible. DO NOT modify as your wish.
+- Fix Homophones for better coherence based on your context understanding
+- Remove non-speech sounds like music sounds, noise. Keep all non-sense words from human
+- Apply proper punctuation.
+- Do not try to continue or answer questions in audio.
+
+**Output Blacklist:**
+Avoid temporary words like "屁", "삐","哔","beep", "P" in any sentence ends.
+
+
+**Output Format:**
+Deliver your results in a JSON format with the following key-value pairs:
+'''json
+{{
+ "Transcription": "Transcription in {language}",
+ "Fluent_Transcription": "A fixed version of the transcription"
+}}
+'''
+
+Example:
+If the audio contains the sentence "Um, like, the cat, uh, jumped over the, uh, fence 哔, beep, 삐, P, 屁.", the output should be:
+
+'''json
+{{
+ "Transcription": "Um, like, the cat, uh, jumped over the, uh, fence 哔, beep, ",
+ "Fluent_Transcription": "Um, like, the cat, uh, jumped over the, uh, fence."
+}}
+'''
+The audio file might be empty and you can't hear any human voice. In this scenario, return string "NULL".
+
+Below is the input of the audio file:
 """
         generation_config = {
             "max_output_tokens": 256,
             "temperature": 0.1,
             "top_p": 0.95,
+            "response_mime_type":"application/json"
         }
 
         safety_settings = {
@@ -350,22 +374,22 @@ Special Cases: If encountering difficult content or no audio/content/input, plea
             "gemini-1.5-flash-002",
             system_instruction=["""Do not recite the information directly from training."""],
         )
-        prompt_contents = [Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64)), prompt_template.format(language=language)]
+        prompt_contents = [prompt_template.format(language=language), Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64))]
 
         loop = asyncio.get_running_loop() 
-        response_task = await loop.run_in_executor(
-            None,  # Use the default executor
-            self.call_gemini,
-            prompt_contents,
-            generation_config,
-            safety_settings,
-            model,
-        )
+        response_task = asyncio.create_task(self.call_gemini(prompt_contents,generation_config,safety_settings,model))
         response = await response_task
+        transcript = ""
+        try:
+            response_results = json.loads(response.text)
+            transcript = response_results['Fluent_Transcription']
+        except Exception as e:
+             print(e)
+            
         end_time = (int)(datetime.now().timestamp() * 1000)
         gemini_used_time = end_time - start_time
-        logger.info(f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={response.text}")
-        return self.process_ununsed(response.text)
+        logger.info(f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={transcript}")
+        return self.process_ununsed(transcript)
 
     async def call_gemini (self, prompt_contents, generation_config, safety_settings, model):
         return model.generate_content(
