@@ -1,4 +1,4 @@
-
+import audioop
 import queue
 
 import stt_pb2 as stt__pb2
@@ -128,7 +128,42 @@ def build_request_body(chunk, language_code):
         )
     )
 
-def listen_print_loop(responses: object, stream: object) -> None:
+def play_audio(transcript,service):
+    def request_iterator(transcript):
+        for text in [transcript]:
+            yield stt__pb2.TextRequest(text=text)
+
+    responses = service.txt_to_speech(request_iterator(transcript))
+    for response in responses:
+
+        audio_content = response.audio
+        # 配置音频参数
+        FORMAT = pyaudio.paInt16  # 音频数据格式（16-bit PCM，常见格式）
+        CHANNELS = 1  # 声道数量（1 为单声道，2 为立体声）
+        RATE = 8000  # 采样率（单位：Hz）
+
+        # 初始化 PyAudio
+        audio = pyaudio.PyAudio()
+
+        # 打开输出流
+        stream = audio.open(format=FORMAT,
+                            channels=CHANNELS,
+                            rate=RATE,
+                            output=True)
+
+        # 播放音频流
+        for i in range(0, len(audio_content), CHUNK):
+            mulaw_chunk = audio_content[i:i + CHUNK]  # 取出音频块
+            pcm_chunk = audioop.ulaw2lin(mulaw_chunk, 2)  # 解码为 16-bit PCM
+            stream.write(pcm_chunk)  # 播放解码后的音频块
+
+        # 关闭流和终端
+        stream.stop_stream()
+        stream.close()
+        audio.terminate()
+
+
+def listen_print_loop(responses: object, stream: object,service) -> None:
     """Iterates through server responses and prints them.
 
     The responses passed is a generator that will block until a response
@@ -168,6 +203,8 @@ def listen_print_loop(responses: object, stream: object) -> None:
 
             stream.last_transcript_was_final = True
 
+            play_audio(transcript, service)
+
             # Exit recognition if any of the transcribed phrases could be
             # one of our keywords.
             if re.search(r"\b(exit|quit)\b", transcript, re.I):
@@ -201,7 +238,7 @@ def main() -> None:
                 yield build_request_body(chunk=item, language_code = args.language)
         responses = service.DoSpeechToText(request_stream(), _TIMEOUT_SECONDS_STREAM)
         
-        listen_print_loop(responses, stream)
+        listen_print_loop(responses, stream,service)
 
 if __name__ == "__main__":
     main()
