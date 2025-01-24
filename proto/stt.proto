@@ -7,6 +7,7 @@ option java_package = "com.google.asr.stt";
 // The Listener service definition.
 service Listener {
   rpc DoSpeechToText (stream SpeechChunkRequest) returns (stream TranscriptStreamResponse) {}
+  rpc DoTxtToSpeech (stream TextRequest) returns (stream AudioResponse) {}
 }
 
 // speech recognition config (fields are optional by default in proto3)
@@ -49,4 +50,13 @@ message TranscriptStreamResult {
 message TranscriptStreamResponse {
   int32 speech_event_offset = 1;
   repeated TranscriptStreamResult results = 2;
+}
+
+// text-to-speech related messages
+message TextRequest {
+  string text = 1; // 文本内容
+}
+
+message AudioResponse {
+  bytes audio = 1; // 音频内容
 }

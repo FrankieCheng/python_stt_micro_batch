@@ -1,3 +1,4 @@
+import stt_pb2
 import stt_pb2_grpc as stt__pb2__grpc
 
 from concurrent import futures
@@ -6,6 +7,8 @@ import argparse
 import logging
 import asyncio
 import grpc
+
+from TxtSpeechBridge import TextToSpeechBridge
 from transcribe_server import TranscriptionServer
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
@@ -39,6 +42,12 @@ class Listener(stt__pb2__grpc.ListenerServicer):
             if None != transcript_result:
                 yield transcript_result
 
+    def txt_to_speech(self,request_iterator,context):
+        bridge = TextToSpeechBridge(None)
+        for request in request_iterator:
+            text = request.text  # 从请求中获取文本内容
+            audio_content = bridge.start(text)
+            yield stt_pb2.AudioResponse(audio=audio_content)
 
 async def serve(port, project, location):
     with futures.ThreadPoolExecutor(max_workers=20) as executor:
