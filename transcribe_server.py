@@ -134,11 +134,11 @@ class TranscriptionServer:
             Exception: If there is an error during the audio frame processing.
         """
         # use the current start variable while there is new stream to avoid some performace issues (more than 1000 ms responses/tiemout etc.) due to the performances of invoke chirp/gemini.
-        last_round_end = ((int)(len(self.all_chunks)/self.WINDOW_SIZE_SAMPLES))*self.WINDOW_SIZE_SAMPLES
+        last_round_end = (len(self.all_chunks) // self.WINDOW_SIZE_SAMPLES) * self.WINDOW_SIZE_SAMPLES
         current_last_start = self.last_start
         current_all_segments = []
         self.all_chunks = torch.cat([self.all_chunks, current_chunks])
-        
+
         # use current all chunks to re-caculate all chunks/segments etc.
         current_all_chunks = self.all_chunks.clone()
 
@@ -147,6 +147,8 @@ class TranscriptionServer:
         for i in range(last_round_end, len(current_all_chunks), self.WINDOW_SIZE_SAMPLES):
             loop_end_index = i+ self.WINDOW_SIZE_SAMPLES
             chunk = current_all_chunks[i: loop_end_index]
+            if len(chunk) < self.WINDOW_SIZE_SAMPLES:
+                break
             # if current chunks contains speech, will send the chunks to backend, otherwise, ignore all the new chunks.
             if loop_end_index > last_round_end and len(chunk) == self.WINDOW_SIZE_SAMPLES and self.model_temp(chunk, self.SAMPLING_RATE).item() > self.speech_threshold:
                 has_new_speech = True
@@ -174,55 +176,52 @@ class TranscriptionServer:
             return None
         logger.info("current all segments logging check.")
         logger.info(current_all_segments)
-
+        if not current_all_segments:
+            return None
         # define a variable 'valid segments' to record the segments in current segments.
         valid_segments = []
         # temp start segment should be equal with previous segment end.
         temp_start_segment = current_all_segments[0]['start']
-
-        for segment_index, segment in enumerate(current_all_segments):
-            # if the segment has transcript, add the final segment into valid segments.
-            if 'transcript' in segment:
-                # 'end' n segment with transcript should be final, and should be added into valid segments. 
-                # The intermidate segments with transcript will be ignored.
-                if 'end' in segment:
-                    valid_segments.append(segment)
-                    temp_start_segment = segment['end']
-                    continue
-            else:
-                # process the last segment, and the segments more than 1/10 seconds, the segment should be transcripted.
-                if 'immediate' in segment and segment_index == len(current_all_segments) - 1 and segment['immediate'] - segment['start'] > self.SAMPLING_RATE/10:
-                    segment['start'] = temp_start_segment
-                    valid_segments.append(segment)
-                elif 'end' in segment:
-                    segment['start'] = temp_start_segment
-                    valid_segments.append(segment)
-                    temp_start_segment = segment['end']
+        for segment in current_all_segments:
+            logger.debug(f"segment:{segment}")
+            if 'transcript' in segment and 'end' in segment:
+                valid_segments.append(segment)
+                temp_start_segment = segment['end']
+            elif 'immediate' in segment and segment['immediate'] - segment['start'] > self.SAMPLING_RATE:
+                segment['start'] = temp_start_segment
+                valid_segments.append(segment)
+            elif 'end' in segment:
+                segment['start'] = temp_start_segment
+                valid_segments.append(segment)
+                temp_start_segment = segment['end']
         logger.info("all valid segment check.")
-        current_transcript_segments = list(filter(lambda x: not 'transcript' in x, valid_segments))
-        transcription_segments_len = len(current_transcript_segments)
-        # if transcription segments length > 2, we should merge the segments to reduce the transcript invoke for better performance.
-        if transcription_segments_len > 2:
-            current_transcript_segments = [{'start': current_transcript_segments[0]['start'], 'end': current_transcript_segments[transcription_segments_len - 2]['end']},current_transcript_segments[transcription_segments_len - 1]]
-        logger.info(f"transcription_segments_len = {len(current_transcript_segments)}")
-        for segment_index, segment in enumerate(current_transcript_segments):
-            current_start_index = segment['start']
-            current_end_index = segment['end'] if 'end' in segment else segment['immediate']
-            logger.info(f"current_transcript_segment start={current_start_index}, current_end_index={current_end_index}")
-            torch_chunks = current_all_chunks[current_start_index: current_end_index]
-            transcripted_base64_content = self.tensor_to_base64(torch_chunks, self.SAMPLING_RATE)
-        
-            # change the method transcribe/transcribe_by_gemini, and temp used transcribe_by_gemini instead of chirp_2.
-            #transcribe_thread_submit = self.transcribe(transcripted_base64_content, language_code)
-            transcript_json_result = await self.transcribe_by_gemini(transcripted_base64_content, LANGUAGE_CODE_DIC[language_code])
-            transcript_segment = self.find_first_no_transcript_segment(current_transcript_segments)
+
+        transcription_segments = list(filter(lambda x: 'transcript' not in x, valid_segments))
+        logger.debug(f"transcription_segments:{transcription_segments}")
+        if len(transcription_segments) > 2:
+            merged_segment = {
+                'start': transcription_segments[0]['start'],
+                'end': transcription_segments[-2]['end']
+            }
+            transcription_segments = [merged_segment, transcription_segments[-1]]
+
+        logger.info(f"transcription_segments_len = {len(transcription_segments)}")
+        for segment in transcription_segments:
+            start_index = segment['start']
+            end_index = segment['end'] if 'end' in segment else segment['immediate']
+            logger.debug(f"start_index:{start_index} - end_index:{end_index}")
+            torch_chunks = current_all_chunks[start_index:end_index]
+            base64_content = self.tensor_to_base64(torch_chunks, self.SAMPLING_RATE)
+            # 调转录
+            transcript_result = await self.transcribe_by_gemini(base64_content, LANGUAGE_CODE_DIC[language_code])
+            transcript_segment = self.find_first_no_transcript_segment(transcription_segments)
             if None != transcript_segment:
-                transcript_segment['transcript'] = transcript_json_result
-        #logger.info(current_transcript_segments)
-        #TODO: should resolve the segments == 0 issues.
-        if len(current_transcript_segments) == 0:
-            return None
-        return self.recv_audio_output(current_transcript_segments)
+                transcript_segment['transcript'] = transcript_result
+
+            if len(transcription_segments) == 0:
+                return None
+
+        return self.recv_audio_output(transcription_segments)
 
     def find_first_no_transcript_segment(self, segments):
         StreamingRecognizeResponse
