@@ -44,7 +44,7 @@ class TextToSpeechBridge:
         try:
             client = texttospeech.TextToSpeechClient()
             # 请求 Google Text-to-Speech 服务
-            logger.success(text)
+            logger.success(f"开始调用TTS服务，处理文本:{text}")
             input_text = texttospeech.SynthesisInput(text=text)
             response = client.synthesize_speech(
                 input=input_text,
