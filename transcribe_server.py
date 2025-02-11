@@ -110,6 +110,8 @@ class TranscriptionServer:
                         transcript = segment['transcript'],
                         confidence = 0.2
                     )]))
+                if is_final:
+                    print(f"11111: {segment['transcript']}")
             return stt__pb2.TranscriptStreamResponse(
                 speech_event_offset = current_transcript_segments[0]['start'],
                 results = transcript_stream_results)
@@ -157,6 +159,7 @@ class TranscriptionServer:
                 break
             # vad invoke, find the end of speech/segment.
             speech_dict = self.vad_iterator(chunk, return_seconds=False)
+            #print(speech_dict)
             # if end of segment founds, and split audio into big segments, and then find the next one.
             if speech_dict and 'end' in speech_dict:
                 logging.info(f"--------1 end dict founded last_start={current_last_start} last_end={speech_dict['end']} index={i}")
@@ -165,11 +168,17 @@ class TranscriptionServer:
                 self.last_start = speech_dict['end']
             elif loop_end_index == len(current_all_chunks):
                 current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
+            elif speech_dict and 'start' in speech_dict:
+                current_last_start = speech_dict['start']
+                self.last_start = speech_dict['start']
         logger.info(f"--------before transcript begins. is_speech={has_new_speech}")
         #if no new speech detected, just return the transcription, otherwise, we should process those.
 
         #used for debug only to check the wav files.
         #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
+        if not has_new_speech:
+            self.last_start = len(current_all_chunks)
+            return None
         if not (current_all_segments and ('end' in speech_dict for speech_dict in current_all_segments)) and not has_new_speech:
             return None
         logger.info("current all segments logging check.")

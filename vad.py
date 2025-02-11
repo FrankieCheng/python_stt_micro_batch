@@ -14,7 +14,7 @@ class VADIterator:
                  model,
                  threshold: float = 0.5,
                  sampling_rate: int = 16000,
-                 min_silence_duration_ms: int = 100,
+                 min_silence_duration_ms: int = 400,
                  speech_pad_ms: int = 30
                  ):
 
