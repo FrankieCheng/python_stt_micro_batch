@@ -200,11 +200,11 @@ class TranscriptionServer:
                     continue
             else:
                 # process the last segment, and the segments more than 1/10 seconds, the segment should be transcripted.
-                if 'immediate' in segment and segment_index == len(current_all_segments) - 1 and segment['immediate'] - segment['start'] > self.SAMPLING_RATE/10:
+                if 'immediate' in segment and segment_index == len(current_all_segments) - 1 and segment['immediate'] - segment['start'] > self.SAMPLING_RATE * 2 / 10:
                     segment['start'] = temp_start_segment
                     valid_segments.append(segment)
                 elif 'end' in segment:
-                    segment['start'] = temp_start_segment
+                    #segment['start'] = temp_start_segment
                     valid_segments.append(segment)
                     temp_start_segment = segment['end']
         logger.info("all valid segment check.")
@@ -244,11 +244,11 @@ class TranscriptionServer:
     def cleanup(self):
         self.all_chunks = []
             
-    # # save tensor to wav.
-    # def save_tensor_to_wav(self, tensor, sample_rate, output_file):
-    #     if tensor.ndim == 1:
-    #         tensor = tensor.unsqueeze(0)
-    #     torchaudio.save(output_file, tensor, sample_rate, bits_per_sample=16)
+    # save tensor to wav.
+    def save_tensor_to_wav(self, tensor, sample_rate, output_file):
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        torchaudio.save(output_file, tensor, sample_rate, bits_per_sample=16)
 
     # covert tensor object to base64.
     def tensor_to_base64(self, tensor, sample_rate):
@@ -322,24 +322,26 @@ class TranscriptionServer:
     # transcribe by gemini
     async def transcribe_by_gemini(self, audio_base64,
         language):
-        prompt_template = """You are a highly skilled AI assistant specializing in accurate transcription. Your task is to faithfully transcribe the audio to {language}
-**Here's your detailed workflow:**
-1. **Language Identification:** Carefully analyze the audio to determine the spoken language ({language}).
-2. **Transcription:** Generate a verbatim transcription of the audio in {language}.
-- Only include spoken words.
-- Preserve the original language text if you hear foreign nouns or entities. For example, place names and celebrity names.
-3. **Polish Transcription:**
-Based on the results you got from Transcription, do tiny modification. Below are some requirements
-- Start from the Transcription you got in step 2
-- Keep the content as much as possible. DO NOT modify as your wish.
-- Fix Homophones for better coherence based on your context understanding
-- Remove non-speech sounds like music sounds, noise. Keep all non-sense words from human
-- Apply proper punctuation.
-- Do not try to continue or answer questions in audio.
+        prompt_template = """You are a professional AI audio transcription expert. Your task is to accurately transcribe audio into {language}.
 
-**Output Blacklist:**
-Avoid temporary words like "屁", "삐","哔","beep", "P" in any sentence ends.
+**Workflow:**
 
+1.  **Language Identification:** Determine the language spoken in the audio.
+2.  **Raw Transcription:** Transcribe the audio verbatim in {language}, including:
+    * All spoken words.
+    * Foreign nouns and entities (e.g., place names, celebrity names) exactly as spoken.
+3.  **Noise Processing:**
+    * Detect noise segments within the audio.
+    * Ignore the noise segments; do not transcribe them.
+4.  **Refined Transcription:** Improve the raw transcription with the following:
+    * Base the refined transcription on the Raw Transcription from step 2.
+    * Preserve the original content as much as possible.
+    * Correct homophones based on context.
+    * Remove non-speech sounds (music, noise), but retain human non-sense words.
+    * Apply accurate punctuation.
+    * Do not add to or interpret the audio content.
+5.  **Output Blacklist:** Exclude "屁", "삐", "哔", "beep", "P" from sentence endings.
+6.  **Empty Audio Handling:** If the audio is empty or contains no human speech, return "NULL".
 
 **Output Format:**
 Deliver your results in a JSON format with the following key-value pairs:
