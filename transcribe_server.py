@@ -58,11 +58,12 @@ class TranscriptionServer:
         # we will use model temp to do some temp job, for example speech detect/segment the audios and so on.
         self.model_temp = torch.jit.load('silero_vad/silero_vad.jit')
         self.all_chunks = torch.tensor([])
-        self.speech_threshold = 0.5
-        self.vad_iterator = VADIterator(self.model, self.speech_threshold)
+        self.speech_threshold = 0.7
+        self.min_silence_duration_ms = 100
+        self.vad_iterator = VADIterator(model=self.model, threshold=self.speech_threshold, sampling_rate=self.SAMPLING_RATE, min_silence_duration_ms=self.min_silence_duration_ms)
         self.recognizer = recognizer
         self.last_end = 0
-        self.last_start = 0
+        self.last_start = -1
         self.all_transcriptions = []
         self.transcript_stream_results = []
 
@@ -155,20 +156,22 @@ class TranscriptionServer:
             # process the last chunk, in most cases, the last chunk should be added all segments as immediate.
             if loop_end_index >= len(current_all_chunks) - 1:
                 logging.debug("end of the audio/chunk detected.")
-                current_all_segments.append({'start':current_last_start, 'immediate':i + len(chunk)})
+                if current_last_start != -1:
+                    current_all_segments.append({'start':current_last_start, 'immediate':i + len(chunk)})
                 break
             # vad invoke, find the end of speech/segment.
             speech_dict = self.vad_iterator(chunk, return_seconds=False)
-            #print(speech_dict)
+            print(speech_dict)
             # if end of segment founds, and split audio into big segments, and then find the next one.
             if speech_dict and 'end' in speech_dict:
                 logging.info(f"--------1 end dict founded last_start={current_last_start} last_end={speech_dict['end']} index={i}")
                 current_all_segments.append({'start':current_last_start, 'end':speech_dict['end']})
-                current_last_start = speech_dict['end']
-                self.last_start = speech_dict['end']
+                current_last_start = -1
+                self.last_start = -1
             elif loop_end_index == len(current_all_chunks):
-                current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
-            elif speech_dict and 'start' in speech_dict:
+                if current_last_start != -1:
+                    current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
+            if speech_dict and 'start' in speech_dict:
                 current_last_start = speech_dict['start']
                 self.last_start = speech_dict['start']
         logger.info(f"--------before transcript begins. is_speech={has_new_speech}")
@@ -176,9 +179,6 @@ class TranscriptionServer:
 
         #used for debug only to check the wav files.
         #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
-        if not has_new_speech:
-            self.last_start = len(current_all_chunks)
-            return None
         if not (current_all_segments and ('end' in speech_dict for speech_dict in current_all_segments)) and not has_new_speech:
             return None
         logger.info("current all segments logging check.")
