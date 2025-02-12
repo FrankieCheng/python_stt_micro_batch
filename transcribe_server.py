@@ -8,11 +8,12 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 import vertexai.preview.generative_models as generative_models
 import asyncio
-
+from loguru import logger
 import stt_pb2 as stt__pb2
 import logging
 import torchaudio
 import numpy as np
+import noisereduce as nr
 import base64
 from datetime import datetime
 import io
@@ -27,9 +28,9 @@ from utils_vad import (get_speech_timestamps)
 # ts = get_speech_timestamps(wav, model1, 0.5)
 # print (ts)
 
-FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('TranscriptionServer')
+# FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
+# logging.basicConfig(level=logging.INFO)
+# logger = logging.getLogger('TranscriptionServer')
 
 LANGUAGE_CODE_DIC = {
 'ar-EG':'Arabic',
@@ -349,7 +350,11 @@ If the audio contains the sentence "Um, like, the cat, uh, jumped over the, uh, 
  "Fluent_Transcription": "Um, like, the cat, uh, jumped over the, uh, fence."
 }}
 '''
-The audio file might be empty and you can't hear any human voice. In this scenario, return string "NULL".
+**Here are the guidelines for your responses:**
+-The audio file might be empty and you can't hear any human voice. Or you can only hear ambient sound or noise. In this scenario, Must only return string "NULL".
+-MUST NOT generate text that is unrelated to the input audio, and MUST return "NULL" for unrecognizable content.
+-If the transcription contains "测试" or "测试音频" but it was not actually spoken in the audio, remove it and MUST return "NULL".
+
 
 Below is the input of the audio file:
 """

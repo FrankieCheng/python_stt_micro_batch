@@ -8,7 +8,7 @@ import grpc
 import argparse
 from vad import (VADIterator, read_audio)
 from typing import Iterator
-
+from loguru import logger
 from concurrent.futures import ThreadPoolExecutor
 
 SAMPLING_RATE = 16000
@@ -83,7 +83,14 @@ class Sender:
 
     def _response_watcher(self, response_iterator: Iterator[stt__pb2.TranscriptStreamResponse]):
         for item in response_iterator:
-            print(item)
+
+            alternatives = item.results[0].alternatives
+            if alternatives:
+                try:
+                    result = alternatives[0].transcript
+                except:
+                    result = ''
+                logger.debug(result)
         
     def createService(self, ipaddr, port):
         print(f"ip={ipaddr} port={port}")
@@ -96,10 +103,11 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         description='Client to test the STT service')
-    parser.add_argument('-in', action='store', dest='filename', default='temp-test-chinese.wav',
+    # parser.add_argument('-in', action='store', dest='filename', default='/Users/wangjie/Desktop/test_xudan2.wav',
+    parser.add_argument('-in', action='store', dest='filename', default='/Users/wangjie/Desktop/rawRecord.wav',
                         help='audio file')
     parser.add_argument('-a', action='store', dest='ipaddr',
-                        default='localhost',
+                        default='ec2-122-248-254-86.ap-southeast-1.compute.amazonaws.com',
                         help='IP address of server. Default localhost.')
     parser.add_argument('-p', action='store', type=int,
                         dest='port', default=9080, help='port')
@@ -109,4 +117,4 @@ if __name__ == '__main__':
 
     senderObj = Sender()
     service = senderObj.createService(args.ipaddr, args.port)
-    senderObj.clientChunkStream(service, args.filename, 16000, args.language)
+    senderObj.clientChunkStream(service, args.filename, 2000, args.language)
