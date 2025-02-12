@@ -19,25 +19,20 @@ class Listener(stt__pb2__grpc.ListenerServicer):
         self.location = location
 
     async def DoSpeechToText(self, request_iterator, context: grpc.aio.ServicerContext):
-        '''Main rpc function for converting speech to text
-            Takes in a stream of stt_pb2 SpeechChunk messages
-            and returns a stream of stt_pb2 Transcript messages
-        '''
+        '''Main rpc function for converting speech to text'''
         logger.info("do speech to text begins.")
         transcription_server = TranscriptionServer(
             project_id=self.project, location=self.location, recognizer="-")
-        # keep sending transcript to client until *all* ASRs are DONE
         async for requests in request_iterator:
             print("request_iterator begins:")
             chunk = requests.content.audio
-            # temp use the first language code as the target language.
             language_code = requests.config.streaming_config.config.language_codes[0]
-
-            transcript_result_task = asyncio.create_task(
-                transcription_server.recv_audio_bytes(chunk, language_code))
-            transcript_result = await transcript_result_task
-            if None != transcript_result:
-                yield transcript_result
+            task = asyncio.ensure_future(
+                transcription_server.recv_audio_bytes(chunk, language_code)) #创建task
+            result = await task # 立即等待task完成
+            #print(f"xxxxx={result}")
+            if result is not None:
+                yield result # 立即yield结果
 
 
 async def serve(port, project, location):
