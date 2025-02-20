@@ -12,11 +12,12 @@ import re
 # Audio recording parameters
 SAMPLING_RATE = 16000
 CHUNK = int(SAMPLING_RATE / 2)  # 500ms
-_TIMEOUT_SECONDS_STREAM = 1000 	# timeout for streaming must be for entire stream
+_TIMEOUT_SECONDS_STREAM = 1000  # timeout for streaming must be for entire stream
 
 RED = "\033[0;31m"
 GREEN = "\033[0;32m"
 YELLOW = "\033[0;33m"
+
 
 class MicrophoneStream:
     """Opens a recording stream as a generator yielding the audio chunks."""
@@ -51,10 +52,10 @@ class MicrophoneStream:
         return self
 
     def __exit__(
-        self: object,
-        type: object,
-        value: object,
-        traceback: object,
+            self: object,
+            type: object,
+            value: object,
+            traceback: object,
     ) -> None:
         """Closes the stream, regardless of whether the connection was lost or not."""
         self._audio_stream.stop_stream()
@@ -66,11 +67,11 @@ class MicrophoneStream:
         self._audio_interface.terminate()
 
     def _fill_buffer(
-        self: object,
-        in_data: object,
-        frame_count: int,
-        time_info: object,
-        status_flags: object,
+            self: object,
+            in_data: object,
+            frame_count: int,
+            time_info: object,
+            status_flags: object,
     ) -> object:
         """Continuously collect data from the audio stream, into the buffer.
 
@@ -116,19 +117,21 @@ class MicrophoneStream:
 
             yield b"".join(data)
 
+
 def build_request_body(chunk, language_code):
     return stt__pb2.SpeechChunkRequest(
-        content = stt__pb2.AudioRequest(audio = chunk),
-        config = stt__pb2.StreamingRecognizeRequest(
-            streaming_config = stt__pb2.StreamingConfig(
-                config = stt__pb2.RecognitionConfig(
-                    language_codes = [language_code]
+        content=stt__pb2.AudioRequest(audio=chunk),
+        config=stt__pb2.StreamingRecognizeRequest(
+            streaming_config=stt__pb2.StreamingConfig(
+                config=stt__pb2.RecognitionConfig(
+                    language_codes=[language_code]
                 )
             )
         )
     )
 
-def play_audio(transcript,service):
+
+def play_audio(transcript, service):
     def request_iterator(transcript):
         for text in [transcript]:
             yield stt__pb2.TextRequest(text=text)
@@ -163,7 +166,7 @@ def play_audio(transcript,service):
         audio.terminate()
 
 
-def listen_print_loop(responses: object, stream: object,service) -> None:
+def listen_print_loop(responses: object, stream: object, service) -> None:
     """Iterates through server responses and prints them.
 
     The responses passed is a generator that will block until a response
@@ -223,8 +226,8 @@ def main() -> None:
     """Transcribe speech from audio file."""
     parser = argparse.ArgumentParser(description='Client to test the STT service')
     parser.add_argument('-a', action='store', dest='ipaddr',
-        default='localhost',
-        help='IP address of server. Default localhost.')
+                        default='localhost',
+                        help='IP address of server. Default localhost.')
     parser.add_argument('-p', action='store', type=int, dest='port', default=9080, help='port')
     parser.add_argument('-l', action='store', type=str, dest='language', default='zh-Hans-CN', help='language')
     args = parser.parse_args()
@@ -235,10 +238,12 @@ def main() -> None:
     with MicrophoneStream(SAMPLING_RATE, CHUNK) as stream:
         def request_stream():
             for item in stream.generator():
-                yield build_request_body(chunk=item, language_code = args.language)
+                yield build_request_body(chunk=item, language_code=args.language)
+
         responses = service.DoSpeechToText(request_stream(), _TIMEOUT_SECONDS_STREAM)
-        
-        listen_print_loop(responses, stream,service)
+
+        listen_print_loop(responses, stream, service)
+
 
 if __name__ == "__main__":
     main()

@@ -19,7 +19,7 @@ from datetime import datetime
 import io
 import torch
 import json
-from vad import (VADIterator,read_audio)
+from vad import (VADIterator, read_audio)
 from utils_vad import (get_speech_timestamps)
 
 # wav = read_audio("vad-test.wav", 16000)
@@ -33,18 +33,19 @@ from utils_vad import (get_speech_timestamps)
 # logger = logging.getLogger('TranscriptionServer')
 
 LANGUAGE_CODE_DIC = {
-'ar-EG':'Arabic',
-'zh-Hans-CN':'Chinese',
-'cmn-Hant-TW':'Traditional Chinese',
-'nl-NL':'Dutch',
-'en-US':'English',
-'fr-FR':'French',
-'de-DE':'German',
-'hi-IN':'Hindi',
-'it-IT':'Italian',
-'ja-JP':'Japanese',
-'pt-PT':'Portuguese',
-'es-ES':'Spanish'}
+    'ar-EG': 'Arabic',
+    'zh-Hans-CN': 'Chinese',
+    'cmn-Hant-TW': 'Traditional Chinese',
+    'nl-NL': 'Dutch',
+    'en-US': 'English',
+    'fr-FR': 'French',
+    'de-DE': 'German',
+    'hi-IN': 'Hindi',
+    'it-IT': 'Italian',
+    'ja-JP': 'Japanese',
+    'pt-PT': 'Portuguese',
+    'es-ES': 'Spanish'}
+
 
 class TranscriptionServer:
     SAMPLING_RATE = 16000
@@ -53,7 +54,7 @@ class TranscriptionServer:
 
     def __init__(self, project_id, location, recognizer):
         torch.set_num_threads(1)
-        self.PROJECT_ID = project_id  
+        self.PROJECT_ID = project_id
         self.LOCATION = location
         self.model = torch.jit.load('silero_vad/silero_vad.jit')
         # we will use model temp to do some temp job, for example speech detect/segment the audios and so on.
@@ -69,7 +70,7 @@ class TranscriptionServer:
 
     # used for .wav files input
     async def recv_audio(self,
-                   new_chunk, language_code):
+                         new_chunk, language_code):
         # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
         logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
         if new_chunk == None:
@@ -81,45 +82,45 @@ class TranscriptionServer:
 
     # used for bytes input, and only float32 is supported.
     async def recv_audio_bytes(self,
-                   new_chunk, language_code):
+                               new_chunk, language_code):
         try:
             logger.info(f"{type(new_chunk)} len={len(new_chunk)}")
-            #read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
+            # read the chunks, and convert the chunks to SAMPLING_RATE(as 16000 default.)
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
-            #logger.info(audio_array)
+            # logger.info(audio_array)
             current_chunks = torch.Tensor(audio_array)
 
             task = asyncio.create_task(self.process_new_chunks(current_chunks, language_code))
             result = await task
             return result
         except Exception as e:
-             print(e)
-             return None
+            print(e)
+            return None
 
     # reconstructed output method
     def recv_audio_output(self, current_transcript_segments):
         if current_transcript_segments and len(current_transcript_segments) > 0:
-            
+
             transcript_stream_results = []
             for segment in current_transcript_segments:
                 result_end_offset = segment['end'] if 'end' in segment else segment['immediate']
                 is_final = True if 'end' in segment else False
                 transcript_stream_results.append(stt__pb2.TranscriptStreamResult(
-                    result_end_offset = result_end_offset,
-                    is_final = is_final,
-                    alternatives = [stt__pb2.Alternative(
-                        transcript = segment['transcript'],
-                        confidence = 0.2
+                    result_end_offset=result_end_offset,
+                    is_final=is_final,
+                    alternatives=[stt__pb2.Alternative(
+                        transcript=segment['transcript'],
+                        confidence=0.2
                     )]))
             return stt__pb2.TranscriptStreamResponse(
-                speech_event_offset = current_transcript_segments[0]['start'],
-                results = transcript_stream_results)
+                speech_event_offset=current_transcript_segments[0]['start'],
+                results=transcript_stream_results)
         else:
             return None
 
     # process new chunks
     async def process_new_chunks(self,
-                   current_chunks, language_code):
+                                 current_chunks, language_code):
         """
         Receive audio chunks from a client in an infinite loop.
 
@@ -146,34 +147,37 @@ class TranscriptionServer:
         has_new_speech = False
         # start to calculate the trunks from last round end, since the sentence is not over yet, we will use this to find the end of the sentence then split it into segments.
         for i in range(last_round_end, len(current_all_chunks), self.WINDOW_SIZE_SAMPLES):
-            loop_end_index = i+ self.WINDOW_SIZE_SAMPLES
+            loop_end_index = i + self.WINDOW_SIZE_SAMPLES
             chunk = current_all_chunks[i: loop_end_index]
             if len(chunk) < self.WINDOW_SIZE_SAMPLES:
                 break
             # if current chunks contains speech, will send the chunks to backend, otherwise, ignore all the new chunks.
-            if loop_end_index > last_round_end and len(chunk) == self.WINDOW_SIZE_SAMPLES and self.model_temp(chunk, self.SAMPLING_RATE).item() > self.speech_threshold:
+            if loop_end_index > last_round_end and len(chunk) == self.WINDOW_SIZE_SAMPLES and self.model_temp(chunk,
+                                                                                                              self.SAMPLING_RATE).item() > self.speech_threshold:
                 has_new_speech = True
             # process the last chunk, in most cases, the last chunk should be added all segments as immediate.
             if loop_end_index >= len(current_all_chunks) - 1:
                 logging.debug("end of the audio/chunk detected.")
-                current_all_segments.append({'start':current_last_start, 'immediate':i + len(chunk)})
+                current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
                 break
             # vad invoke, find the end of speech/segment.
             speech_dict = self.vad_iterator(chunk, return_seconds=False)
             # if end of segment founds, and split audio into big segments, and then find the next one.
             if speech_dict and 'end' in speech_dict:
-                logging.info(f"--------1 end dict founded last_start={current_last_start} last_end={speech_dict['end']} index={i}")
-                current_all_segments.append({'start':current_last_start, 'end':speech_dict['end']})
+                logging.info(
+                    f"--------1 end dict founded last_start={current_last_start} last_end={speech_dict['end']} index={i}")
+                current_all_segments.append({'start': current_last_start, 'end': speech_dict['end']})
                 current_last_start = speech_dict['end']
                 self.last_start = speech_dict['end']
             elif loop_end_index == len(current_all_chunks):
                 current_all_segments.append({'start': current_last_start, 'immediate': i + len(chunk)})
         logger.info(f"--------before transcript begins. is_speech={has_new_speech}")
-        #if no new speech detected, just return the transcription, otherwise, we should process those.
+        # if no new speech detected, just return the transcription, otherwise, we should process those.
 
-        #used for debug only to check the wav files.
-        #self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
-        if not (current_all_segments and ('end' in speech_dict for speech_dict in current_all_segments)) and not has_new_speech:
+        # used for debug only to check the wav files.
+        # self.save_tensor_to_wav(self.all_chunks, 16000, f"checkpoint_to_wav_{len(self.all_chunks)}.wav")
+        if not (current_all_segments and ('end' in speech_dict for speech_dict in
+                                          current_all_segments)) and not has_new_speech:
             return None
         logger.info("current all segments logging check.")
         logger.info(current_all_segments)
@@ -234,7 +238,7 @@ class TranscriptionServer:
     # clean up to reset the all chunks.
     def cleanup(self):
         self.all_chunks = []
-            
+
     # # save tensor to wav.
     # def save_tensor_to_wav(self, tensor, sample_rate, output_file):
     #     if tensor.ndim == 1:
@@ -255,21 +259,21 @@ class TranscriptionServer:
         audio_buffer = io.BytesIO()
         if tensor.ndim == 1:
             tensor = tensor.unsqueeze(0)
-        
+
         # use torchaudio to save tensor to BytesIO object instead of a temp file.
         torchaudio.save(audio_buffer, tensor, sample_rate, format="wav", bits_per_sample=16)
         audio_bytes = audio_buffer.getvalue()
-        
+
         # change bytes to base64
         base64_bytes = base64.b64encode(audio_bytes)
         base64_string = base64_bytes.decode("utf-8")
         return base64_string
 
     # do transcribe use Chirp_2
-    async def transcribe (
-        self,
-        base64_data,
-        language_code:str
+    async def transcribe(
+            self,
+            base64_data,
+            language_code: str
     ):
         start_time = (int)(datetime.now().timestamp() * 1000)
         # Instantiates a client
@@ -280,7 +284,8 @@ class TranscriptionServer:
         )
 
         long_audio_config = cloud_speech.RecognitionConfig(
-            explicit_decoding_config={'encoding':ExplicitDecodingConfig.AudioEncoding.LINEAR16, 'sample_rate_hertz':16000, 'audio_channel_count':1},
+            explicit_decoding_config={'encoding': ExplicitDecodingConfig.AudioEncoding.LINEAR16,
+                                      'sample_rate_hertz': 16000, 'audio_channel_count': 1},
             language_codes=[language_code],
             model="chirp",
             features=cloud_speech.RecognitionFeatures(
@@ -291,7 +296,7 @@ class TranscriptionServer:
         audio_request = cloud_speech.RecognizeRequest(
             recognizer=f"projects/{self.PROJECT_ID}/locations/{self.LOCATION}/recognizers/{self.recognizer}",
             config=long_audio_config,
-            content = base64_data,
+            content=base64_data,
         )
 
         # Get the recognition results
@@ -299,20 +304,21 @@ class TranscriptionServer:
 
         request_end_time = (int)(datetime.now().timestamp() * 1000)
         response_time = request_end_time - start_time
-        #logging.info(f"response time={response_time}")
+        # logging.info(f"response time={response_time}")
 
-        #logging.info(response)
+        # logging.info(response)
         results = response.results[0]
 
         if results.alternatives and results.alternatives[0].transcript:
             transcript = results.alternatives[0].transcript
-            logger.info(f"transcript={transcript} response time={response_time} result_end_offset={response.metadata.total_billed_duration.seconds} request_start_time={start_time} request_end_time={request_end_time}")
+            logger.info(
+                f"transcript={transcript} response time={response_time} result_end_offset={response.metadata.total_billed_duration.seconds} request_start_time={start_time} request_end_time={request_end_time}")
             return self.process_ununsed(transcript)
         return ""
-    
+
     # transcribe by gemini
     async def transcribe_by_gemini(self, audio_base64,
-        language):
+                                   language):
         prompt_template = """You are a highly skilled AI assistant specializing in accurate transcription. Your task is to faithfully transcribe the audio to {language}
 **Here's your detailed workflow:**
 1. **Language Identification:** Carefully analyze the audio to determine the spoken language ({language}).
@@ -362,7 +368,7 @@ Below is the input of the audio file:
             "max_output_tokens": 256,
             "temperature": 0.1,
             "top_p": 0.95,
-            "response_mime_type":"application/json"
+            "response_mime_type": "application/json"
         }
 
         safety_settings = {
@@ -378,36 +384,40 @@ Below is the input of the audio file:
             "gemini-1.5-flash-002",
             system_instruction=["""Do not recite the information directly from training."""],
         )
-        prompt_contents = [prompt_template.format(language=language), Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64))]
+        prompt_contents = [prompt_template.format(language=language),
+                           Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64))]
 
-        loop = asyncio.get_running_loop() 
-        response_task = asyncio.create_task(self.call_gemini(prompt_contents,generation_config,safety_settings,model))
+        loop = asyncio.get_running_loop()
+        response_task = asyncio.create_task(
+            self.call_gemini(prompt_contents, generation_config, safety_settings, model))
         response = await response_task
         transcript = ""
         try:
             response_results = json.loads(response.text)
             transcript = response_results['Fluent_Transcription']
         except Exception as e:
-             print(e)
-            
+            print(e)
+
         end_time = (int)(datetime.now().timestamp() * 1000)
         gemini_used_time = end_time - start_time
-        logger.info(f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={transcript}")
+        logger.info(
+            f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={transcript}")
         return self.process_ununsed(transcript)
 
-    async def call_gemini (self, prompt_contents, generation_config, safety_settings, model):
+    async def call_gemini(self, prompt_contents, generation_config, safety_settings, model):
         return model.generate_content(
             prompt_contents,
             generation_config=generation_config,
             safety_settings=safety_settings,
             stream=False,
         )
-    #process the unused, only processed chinese/english now.
+
+    # process the unused, only processed chinese/english now.
     def process_ununsed(self, txt):
         txt = txt.replace("\n", "").replace("`", "").replace("삐", "")
-        txt = txt.replace("<spacing>","").replace("<noise>","").replace("<spoken_noise>", "")
+        txt = txt.replace("<spacing>", "").replace("<noise>", "").replace("<spoken_noise>", "")
         return txt.lower().replace("null", "").strip()
-    
+
     # save all chunks into wav.
     def save_all(self):
         self.save_tensor_to_wav(self.all_chunks, self.SAMPLING_RATE, f"output_audio_all_1_{len(self.all_chunks)}.wav")
