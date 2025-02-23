@@ -1,12 +1,3 @@
-import concurrent.futures
-import queue
-import sys
-from typing import List, Dict, Optional
-
-import objgraph
-import psutil
-from pyasn1.type.base import Asn1Type
-
 from prompt import LANGUAGE_LIST,HOTWORDS,PROMPT_TRANSCRIPT,PROMPT_MUL_TRANSLATE,PROMPT_TRANSLATE,PROMPT_TRANSLATE_TO_TARGET
 from google.api_core.client_options import ClientOptions
 from google.cloud.speech_v2 import SpeechClient
@@ -49,31 +40,8 @@ LANGUAGE_CODE_DIC = {
     'es-ES': 'Spanish',
     'ko-KR': 'Korean'
 }
-import tracemalloc
+
 import gc
-from pympler import asizeof
-
-
-def memory_profiler(func):
-    """装饰器：分析函数的内存使用情况"""
-    def wrapper(*args, **kwargs):
-        # 启动内存追踪
-        tracemalloc.start()
-        # 执行目标函数
-        result = func(*args, **kwargs)
-        # 获取内存分配快照
-        snapshot = tracemalloc.take_snapshot()
-        top_stats = snapshot.statistics('lineno')
-        # 打印内存分配情况
-        logger.warning(f"[ Top 10 Memory Blocks in {func.__name__} ]")
-        for stat in top_stats[:10]:
-            logger.warning(stat)
-        # 停止内存追踪
-        tracemalloc.stop()
-        gc.collect()
-        return result
-    return wrapper
-
 
 PROCESS_MODE_TRANSLATE = 'translate'
 PROCESS_MODE_TRANSCRIPT = 'transcript'
@@ -87,13 +55,10 @@ PROMPT_DIC = {
     PROCESS_MODE_TRANSLATE_TO_TARGET: PROMPT_TRANSLATE_TO_TARGET
 }
 
-tracemalloc.start()
-start_snapshot = tracemalloc.take_snapshot()
-
 class TranscriptionServer:
     SAMPLING_RATE = 16000
-    # WINDOW_SIZE_SAMPLES = 1536
-    WINDOW_SIZE_SAMPLES = 512
+    WINDOW_SIZE_SAMPLES = 1536
+    # WINDOW_SIZE_SAMPLES = 512
     SPEECH_THRESHOLD = 0.5
 
     def __init__(self, project_id, location, recognizer, ws):
@@ -107,10 +72,8 @@ class TranscriptionServer:
         logger.debug(self.device)
         self.model = torch.jit.load('silero_vad/silero_vad.jit', map_location=self.device).eval()
         self.model = self.model.to(self.device)
-        self.model_temp = torch.jit.load('silero_vad/silero_vad2.jit', map_location=self.device).eval()
+        self.model_temp = torch.jit.load('silero_vad/silero_vad.jit', map_location=self.device).eval()
         self.model_temp = self.model_temp.to(self.device)
-
-
 
         self.all_chunks = torch.tensor([])
         self.speech_threshold = 0.7
@@ -123,6 +86,8 @@ class TranscriptionServer:
         self.transcript_history = []
         self._queue = asyncio.Queue()
         self.ws = ws
+
+
 
     async def __aenter__(self):
         # 在这里执行初始化操作
@@ -140,12 +105,13 @@ class TranscriptionServer:
     async def clear(self):
         # 清理资源
         # self.all_chunks = torch.tensor([])
+        self.save_all()
         self.all_transcriptions = []
         self.transcript_stream_results = []
         self.transcript_history = []
         del self.model_temp
         del self.model
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         gc.collect()
 
         logger.debug("清理执行完成")
@@ -156,6 +122,17 @@ class TranscriptionServer:
         while not self._queue.empty():
             task = await self._queue.get()
             self._queue.task_done()
+
+    async def get_item(self):
+        item_list = []
+        for i in range(5):
+            item = await self._queue.get()  # 获取队列中的一个元素
+
+            if item is None:  # 如果接收到 None，则终止
+                continue
+            item_list.append(item)
+        return item_list
+
 
     async def start(self):
         """
@@ -172,6 +149,9 @@ class TranscriptionServer:
                 if item is None:  # 如果接收到 None，则终止
                     continue
 
+                # item_list = await self.get_item()
+                #
+                # for item in item_list:
                 media = item["media"]
                 payload = media["payload"]
                 language_code = media["language_code"]
@@ -184,14 +164,13 @@ class TranscriptionServer:
                     total_duration += chunk_duration
 
                     # 输出当前音频流的总持续时间
-                    logger.info(f"当前音频流的总持续时间: {total_duration:.2f} 秒")
-                    logger.debug(f"queue_size:{self._queue.qsize()}")
+                    # logger.info(f"当前音频流的总持续时间: {total_duration:.2f} 秒")
+                    # logger.debug(f"queue_size:{self._queue.qsize()}")
 
                     audio_array = np.frombuffer(merged_audio, dtype=np.float32)
                     current_chunks = torch.Tensor(audio_array)
                     merged_audio = bytearray()
                     result = await self.process_new_chunks(current_chunks, language_code)
-                    # result = None
                     if result is not None:
                         await self.ws.send(json.dumps({"transcript": result}))
 
@@ -305,30 +284,6 @@ class TranscriptionServer:
 
         logger.info("language_code_1: " + language_code_1 + "; language_code_2: " + language_code_2 + "; mode: " + mode)
 
-        def get_tensor_memory_size(tensor):
-            # 每个元素占用的字节数
-            element_size = tensor.element_size()
-            # 张量中的元素总数
-            num_elements = tensor.nelement()
-            # 计算总内存占用（字节数）
-            memory_size_bytes = element_size * num_elements
-            # 转换为 MB 单位
-            memory_size_mb = memory_size_bytes / (1024 ** 2)
-            return memory_size_mb
-
-        def get_model_memory_size(model):
-            total_memory = 0
-            # 遍历模型的所有参数
-            for param in model.parameters():
-                total_memory += param.nelement() * param.element_size()
-            return total_memory / (1024 ** 2)  # 转换为 MB
-
-
-        # 检查模型的内存占用
-        logger.debug(f"self.model 内存占用: {get_model_memory_size(self.model)} MB")
-        logger.debug(f"self.model_temp 内存占用: {get_model_memory_size(self.model_temp)} MB")
-
-
         # use the current start variable while there is new stream to avoid some performace issues (more than 1000 ms responses/tiemout etc.) due to the performances of invoke chirp/gemini.
         last_round_end = ((int)(len(self.all_chunks) / self.WINDOW_SIZE_SAMPLES)) * self.WINDOW_SIZE_SAMPLES
         current_last_start = self.last_start
@@ -338,11 +293,6 @@ class TranscriptionServer:
         # use current all chunks to re-caculate all chunks/segments etc.
         current_all_chunks = self.all_chunks.clone()
 
-        # 计算 self.all_chunks 的内存占用
-        all_chunks_size = get_tensor_memory_size(self.all_chunks)
-        # logger.debug(f"self.all_chunks 的内存占用: {all_chunks_size:.2f} MB")
-
-
         has_new_speech = False
         # start to calculate the trunks from last round end, since the sentence is not over yet, we will use this to find the end of the sentence then split it into segments.
 
@@ -350,21 +300,19 @@ class TranscriptionServer:
             loop_end_index = i + self.WINDOW_SIZE_SAMPLES
             chunk = current_all_chunks[i: loop_end_index]
             if len(chunk) < self.WINDOW_SIZE_SAMPLES:
-                # 使用零填充补全至 512 的长度
-                padding_length = 512 - len(chunk)
+                padding_length = self.WINDOW_SIZE_SAMPLES - len(chunk)
                 chunk = torch.cat([chunk, torch.zeros(padding_length)], dim=0)
             chunk = chunk.to(self.device)
             try:
                 with torch.no_grad():
                     output = self.model_temp(chunk, self.SAMPLING_RATE).item()
                     gc.collect()
-                    torch.cuda.empty_cache()
+                    # torch.cuda.empty_cache()
                     # logger.debug(f"CPU memory usage: {psutil.virtual_memory().percent}%")  # 打印CPU内存信息
             except Exception as e:
-                logger.error(e)
+                # logger.error(e)
                 pass
 
-            logger.debug(f"output:{output}")
             # if current chunks contains speech, will send the chunks to backend, otherwise, ignore all the new chunks.
             if loop_end_index > last_round_end and len(chunk) == self.WINDOW_SIZE_SAMPLES and output > self.speech_threshold:
                 has_new_speech = True
@@ -380,13 +328,13 @@ class TranscriptionServer:
             try:
                 with torch.no_grad():
                     speech_dict = self.vad_iterator(chunk, return_seconds=False)
-                    torch.cuda.empty_cache()
+                    # torch.cuda.empty_cache()
                     gc.collect()
             except:
                 pass
 
             # speech_dict = self.vad_iterator(chunk, return_seconds=False)
-            logger.debug(f"speech_dict:{speech_dict}")
+            # logger.debug(f"speech_dict:{speech_dict}")
 
             # speech_dict = None
             # logger.debug(f"speech_dict:{speech_dict}")
@@ -489,8 +437,8 @@ class TranscriptionServer:
             logger.debug(f"success transcript segment:{segment}")
             return segment
 
-        tasks = []
-        # tasks = [ asyncio.create_task(_process_chunk(segment, language_code_1,language_code_2,mode)) for segment in current_transcript_segments]
+        # tasks = []
+        tasks = [ asyncio.create_task(_process_chunk(segment, language_code_1,language_code_2,mode)) for segment in current_transcript_segments]
         # tasks.append(asyncio.create_task(_process_chunk(chunk, language_code)))
         logger.debug(f"{len(tasks)} 个task开始并发处理")
         # 等待所有的 VAD 和转录任务完成
@@ -508,7 +456,8 @@ class TranscriptionServer:
 
     # clean up to reset the all chunks.
     def cleanup(self):
-        self.all_chunks = []
+        # self.all_chunks = []
+        pass
 
 
     # covert tensor object to base64.
@@ -588,6 +537,7 @@ class TranscriptionServer:
         logger.debug(
             "language_code_1: " + language_code_1 + "; language_code_2: " + language_code_2 + "; mode: " + mode)
 
+
         generation_config = {
             "max_output_tokens": 2048,
             "temperature": 0.1,
@@ -603,11 +553,13 @@ class TranscriptionServer:
         }
 
         start_time = (int)(datetime.now().timestamp() * 1000)
+
         vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
         model = GenerativeModel(
             "gemini-1.5-flash-002",
             system_instruction=["""Do not recite the information directly from training."""],
         )
+
         if mode in PROMPT_DIC:
             prompt_template = PROMPT_DIC[mode]
             logger.debug("mode in PROMPT_DIC")
@@ -630,12 +582,15 @@ class TranscriptionServer:
                 prompt_template.format(language_code_1=language_code_1, hotwords=HOTWORDS, language_list=LANGUAGE_LIST),
                 Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64))]
         else:
-            prompt_contents = [prompt_template.format(language=language_code_1, hotwords=HOTWORDS),
+            prompt_contents = [prompt_template.format(language_code_1=language_code_1, hotwords=HOTWORDS),
                                Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64))]
 
+        time1 = (int)(datetime.now().timestamp() * 1000)
         response_task = asyncio.create_task(
             self.call_gemini(prompt_contents, generation_config, safety_settings, model))
         response = await response_task
+        time2 = (int)(datetime.now().timestamp() * 1000)
+        logger.debug(f"=========={time2-time1}")
         transcript = ""
         translation = ""
         language = ""
@@ -665,12 +620,17 @@ class TranscriptionServer:
     async def call_gemini(self, prompt_contents, generation_config, safety_settings, model):
         # return json.dumps({"Transcription": "Um, like, the cat, uh, jumped over the, uh, fence 哔, beep, ",
  # "Fluent_Transcription": "Um, like, the cat, uh, jumped over the, uh, fence."})
-        return model.generate_content(
+
+        start_time = (int)(datetime.now().timestamp() * 1000)
+        result = model.generate_content(
             prompt_contents,
             generation_config=generation_config,
             safety_settings=safety_settings,
             stream=False,
         )
+        end_time = (int)(datetime.now().timestamp() * 1000)
+        logger.debug(f"use_time:{end_time-start_time}")
+        return result
 
     # process the unused, only processed chinese/english now.
     def process_ununsed(self, txt):
@@ -678,6 +638,11 @@ class TranscriptionServer:
         txt = txt.replace("<spacing>", "").replace("<noise>", "").replace("<spoken_noise>", "")
         return txt.lower().replace("null", "").strip()
 
+    async def save_tensor_to_wav(self, tensor, sample_rate, output_file):
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        torchaudio.save(output_file, tensor, sample_rate, bits_per_sample=16)
+
     # save all chunks into wav.
-    def save_all(self):
-        self.save_tensor_to_wav(self.all_chunks, self.SAMPLING_RATE, f"output_audio_all_1_{len(self.all_chunks)}.wav")
+    async def save_all(self):
+        await self.save_tensor_to_wav(self.all_chunks, self.SAMPLING_RATE, f"/home/liang_xudan/python_stt_server_dev/wav/output_audio_all_1_{len(self.all_chunks)}.wav")

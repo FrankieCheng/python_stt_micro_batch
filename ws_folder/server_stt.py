@@ -1,7 +1,6 @@
 import asyncio
 import threading
 
-import psutil
 import torch
 import websockets
 import base64
@@ -26,28 +25,21 @@ SAMPLING_RATE = 16000  # 假设采样率为 16kHz
 
 # 处理 WebSocket 连接的函数
 async def handle_connection(websocket):
-    async with TranscriptionServer(PROJECT_ID, LOCATION, RECOGNIZER, websocket) as transcript_server:
-        try:
-            await handle_socket(websocket, transcript_server)
-            await transcript_server.clear()
-        except Exception as e:
-            logger.error(f"Connection error: {e}")
-            raise
+    # 初始化转录服务器
+    transcript_server = TranscriptionServer(PROJECT_ID, LOCATION, RECOGNIZER, websocket)
+    # asyncio.create_task(transcript_server.start())
+    await handle_socket(websocket, transcript_server)
+    # task = asyncio.create_task(transcript_server.start())
+    # await task
 
 
 
 
-
-async def log_memory():
-    process = psutil.Process(os.getpid())
-    logger.info(f"Memory used: {process.memory_info().rss / 1024 ** 2:.2f} MB")
 
 
 async def handle_socket(websocket,transcript_server):
     try:
-        start_task = asyncio.create_task(transcript_server.start())
         async for message in websocket:
-            await log_memory()
 
             try:
                 data = json.loads(message)
@@ -56,21 +48,19 @@ async def handle_socket(websocket,transcript_server):
                     await process_single_message(websocket, data, transcript_server)
                 else:
                     await process_single_message(websocket, [data],transcript_server)
+
+                asyncio.create_task(transcript_server.start())
+
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to decode JSON: {e}")
                 await websocket.send(json.dumps({"error": "Invalid JSON format"}))
             except Exception as e:
                 logger.error(f"Unexpected error: {e}")
                 await websocket.send(json.dumps({"error": "Unexpected error occurred"}))
-
     except websockets.exceptions.ConnectionClosedOK:
         logger.info("Connection closed normally")
     except websockets.exceptions.ConnectionClosedError as e:
         logger.error(f"Connection closed with error: {e}")
-    finally:
-        start_task.cancel()  # 确保任务退出
-        await start_task  # 等待任务清理
-        pass
 
 
 async def process_single_message(websocket, data,transcript_server):
@@ -83,6 +73,7 @@ async def process_single_message(websocket, data,transcript_server):
                 await transcript_server.add_request(single_msg)
             elif event == "stop":
                 logger.debug("Audio stream stopped")
+                await transcript_server.save_all()
             elif event == "ping":
                 # 处理心跳消息
                 await websocket.send(json.dumps({"event": "pong"}))
@@ -94,7 +85,7 @@ async def process_single_message(websocket, data,transcript_server):
 
 # 启动 WebSocket 服务器的异步函数
 async def start_server():
-    server = await websockets.serve(handle_connection, "0.0.0.0", HTTP_SERVER_PORT, ping_interval = 30, ping_timeout = 60, max_size = 1024*1024*10)
+    server = await websockets.serve(handle_connection, "0.0.0.0", HTTP_SERVER_PORT, ping_interval = 60, ping_timeout = 120, max_size = 1024*1024*10)
     logger.success(f"Server listening on: ws://localhost:{HTTP_SERVER_PORT}/chat")
     await server.wait_closed()
 
