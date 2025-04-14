@@ -128,4 +128,5 @@ with gr.Blocks() as demo:
 
     grMicrophoneAudio.start_recording(start_recording, inputs=[stats, grMicrophoneAudio,
             language_dropdown], outputs=[stats, transcript_textbox],)
-demo.launch(server_port=7860,share=True)
+    
+demo.launch(server_port=7860)

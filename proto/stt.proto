@@ -36,6 +36,7 @@ message SpeechChunkRequest {
 message Alternative {
   string transcript = 1;
 	float confidence = 2;
+  string translation = 3;
 }
 
 // results in the stream.

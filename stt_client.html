@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Speech-to-Text</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles if needed */
+        body {
+            font-family: 'Inter', sans-serif; /* Use Inter font */
+        }
+        /* Add a subtle animation for the recording indicator */
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .recording-indicator {
+            animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="bg-white rounded-lg shadow-xl p-6 md:p-8 w-full max-w-2xl">
+        <h1 class="text-2xl md:text-3xl font-bold text-center text-gray-800 mb-6">
+            Real-time Speech Transcription
+        </h1>
+
+        <div class="flex flex-col sm:flex-row justify-center items-center gap-4 mb-6">
+            <button id="recordButton" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-lg shadow transition duration-200 ease-in-out w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed">
+                Start Recording
+            </button>
+            <div id="status" class="text-gray-600 text-sm sm:text-base font-medium h-6 flex items-center">
+                Status: Idle
+            </div>
+        </div>
+
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-4 h-64 overflow-y-auto">
+            <h2 class="text-lg font-semibold text-gray-700 mb-2">Transcription:</h2>
+            <div id="transcriptionOutput" class="text-gray-800 whitespace-pre-wrap"></div>
+        </div>
+
+         <div id="errorOutput" class="mt-4 text-red-600 text-sm font-medium"></div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        // IMPORTANT: Replace with the actual URL of YOUR WebSocket server
+        const WEBSOCKET_URL = 'ws://localhost:8765';
+        // Desired sample rate for audio processing. Your gRPC server might expect a specific rate (e.g., 16000).
+        const SAMPLE_RATE = 16000;
+        // Size of audio chunks to send in milliseconds. Smaller values mean lower latency but more messages.
+        const CHUNK_DURATION_MS = 100; // Send audio every 100ms
+
+        // --- DOM Elements ---
+        const recordButton = document.getElementById('recordButton');
+        const statusDiv = document.getElementById('status');
+        const transcriptionOutputDiv = document.getElementById('transcriptionOutput');
+        const errorOutputDiv = document.getElementById('errorOutput');
+
+        // --- State Variables ---
+        let isRecording = false;
+        let websocket = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let audioProcessor = null; // For AudioWorklet
+        let audioWorkletNode = null;
+
+        // --- Audio Worklet Processor ---
+        // This code would typically be in a separate file (e.g., 'audio-processor.js')
+        // but is included here for simplicity in this example.
+        const audioProcessorCode = `
+            class AudioProcessor extends AudioWorkletProcessor {
+                constructor(options) {
+                    super();
+                    this._bufferSize = options.processorOptions.bufferSize; // e.g., 2048
+                    this._buffer = new Float32Array(this._bufferSize);
+                    this._bufferPos = 0;
+                    this.port.onmessage = (event) => {
+                        // Handle messages from the main thread if needed
+                        // console.log('Worklet received:', event.data);
+                    };
+                }
+
+                process(inputs, outputs, parameters) {
+                    // We only expect one input
+                    const input = inputs[0];
+                    // And only one channel (mono)
+                    const channelData = input[0];
+
+                    if (!channelData) {
+                         // No data, keep processor alive
+                        return true;
+                    }
+
+                    // Buffer the incoming audio data
+                    let currentDataPos = 0;
+                    while (currentDataPos < channelData.length) {
+                        const remainingInBuffer = this._bufferSize - this._bufferPos;
+                        const toCopy = Math.min(channelData.length - currentDataPos, remainingInBuffer);
+
+                        this._buffer.set(channelData.subarray(currentDataPos, currentDataPos + toCopy), this._bufferPos);
+                        this._bufferPos += toCopy;
+                        currentDataPos += toCopy;
+
+                        // If buffer is full, send it to the main thread
+                        if (this._bufferPos >= this._bufferSize) {
+                            // Send a copy to avoid transferring ownership issues if processing takes time
+                            this.port.postMessage(this._buffer.slice());
+                            this._bufferPos = 0; // Reset buffer position
+                        }
+                    }
+                    // Keep the processor alive
+                    return true;
+                }
+            }
+            registerProcessor('audio-processor', AudioProcessor);
+        `;
+
+        // --- WebSocket Functions ---
+        function connectWebSocket() {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                console.log("WebSocket already open.");
+                return;
+            }
+
+            setStatus('Connecting...', 'text-yellow-600');
+            errorOutputDiv.textContent = ''; // Clear previous errors
+
+            websocket = new WebSocket(WEBSOCKET_URL);
+
+            websocket.onopen = () => {
+                console.log('WebSocket connection established.');
+                setStatus('Connected. Ready to record.', 'text-green-600');
+                recordButton.disabled = false;
+            };
+
+            websocket.onmessage = (event) => {
+                // Assuming the server sends back plain text transcription results
+                const transcription = event.data;
+                console.log('Received transcription:', transcription);
+                // Append the new transcription fragment
+                // Add a space if the output already has content
+                const separator = transcriptionOutputDiv.textContent.length > 0 ? ' ' : '';
+                transcriptionOutputDiv.textContent += separator + transcription;
+                // Scroll to the bottom
+                transcriptionOutputDiv.scrollTop = transcriptionOutputDiv.scrollHeight;
+            };
+
+            websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                setError(`WebSocket error. Is the server running at ${WEBSOCKET_URL}?`);
+                setStatus('Connection Error', 'text-red-600');
+                stopRecording(); // Ensure recording stops on error
+                recordButton.disabled = true; // Disable button until reconnected
+            };
+
+            websocket.onclose = (event) => {
+                console.log('WebSocket connection closed:', event.code, event.reason);
+                // Don't automatically disable button if closed cleanly by user stop
+                if (isRecording || event.code !== 1000) { // 1000 = Normal Closure
+                     setStatus('Disconnected', 'text-gray-600');
+                     setError(event.reason || `WebSocket closed (Code: ${event.code})`);
+                     recordButton.disabled = true; // Disable until reconnected
+                }
+                 stopRecording(); // Clean up resources if connection closes unexpectedly
+                 websocket = null;
+                 // Optional: Attempt to reconnect after a delay
+                 // setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        function sendAudioData(audioData) {
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                // Convert Float32Array to Int16Array if required by server
+                // const int16Array = new Int16Array(audioData.length);
+                // for (let i = 0; i < audioData.length; i++) {
+                //     int16Array[i] = Math.max(-1, Math.min(1, audioData[i])) * 32767;
+                // }
+                // websocket.send(int16Array.buffer);
+
+                // Sending Float32Array directly as binary
+                 websocket.send(audioData.buffer);
+            } else {
+                console.warn("WebSocket not open. Cannot send audio data.");
+                // Consider stopping recording if WS closes unexpectedly mid-stream
+                if (isRecording) {
+                    stopRecording();
+                    setError("WebSocket closed unexpectedly during recording.");
+                }
+            }
+        }
+
+        // --- MediaStream and Audio Processing Functions ---
+        async function startRecording() {
+            if (isRecording) return;
+
+            if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                setError("WebSocket is not connected. Please wait or check the server.");
+                return;
+            }
+
+            try {
+                setStatus('Requesting microphone access...', 'text-yellow-600');
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+                setStatus('Initializing audio...', 'text-yellow-600');
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+
+                // Create AudioWorklet
+                const workletBlob = new Blob([audioProcessorCode], { type: 'application/javascript' });
+                const workletURL = URL.createObjectURL(workletBlob);
+                await audioContext.audioWorklet.addModule(workletURL);
+
+                // Calculate buffer size based on desired chunk duration
+                const bufferSize = Math.round(SAMPLE_RATE * CHUNK_DURATION_MS / 1000);
+
+                audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor', {
+                     processorOptions: { bufferSize: bufferSize }
+                });
+
+                // Connect microphone stream to worklet
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                source.connect(audioWorkletNode);
+                // Connect worklet to destination to avoid issues, though we don't need the output sound
+                audioWorkletNode.connect(audioContext.destination);
+
+                // Handle messages (audio chunks) from the worklet
+                audioWorkletNode.port.onmessage = (event) => {
+                    if (isRecording) {
+                         sendAudioData(event.data); // event.data is the Float32Array chunk
+                    }
+                };
+
+                 audioWorkletNode.port.onmessageerror = (error) => {
+                    console.error("Error receiving message from worklet:", error);
+                    setError("Audio processing error.");
+                    stopRecording();
+                 };
+
+
+                isRecording = true;
+                recordButton.textContent = 'Stop Recording';
+                recordButton.classList.replace('bg-blue-500', 'bg-red-500');
+                recordButton.classList.replace('hover:bg-blue-600', 'hover:bg-red-600');
+                setStatus('Recording...', 'text-red-500 recording-indicator');
+                errorOutputDiv.textContent = ''; // Clear errors on successful start
+                transcriptionOutputDiv.textContent = ''; // Clear previous transcription
+
+            } catch (error) {
+                console.error('Error starting recording:', error);
+                setError(`Error starting recording: ${error.message}. Please ensure microphone access is granted.`);
+                setStatus('Error', 'text-red-600');
+                stopRecording(); // Clean up any partial setup
+            }
+        }
+
+        function stopRecording() {
+            if (!isRecording && !mediaStream && !audioContext) {
+                // Already stopped or wasn't started
+                return;
+            }
+            console.log("Stopping recording...");
+
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                // Optional: Send a 'stop' message if your WebSocket server expects one
+                // websocket.send(JSON.stringify({ type: 'stop' }));
+            }
+
+             // Disconnect nodes and close context
+             if (audioWorkletNode) {
+                 audioWorkletNode.port.close();
+                 audioWorkletNode.disconnect();
+                 audioWorkletNode = null;
+             }
+             if (audioContext) {
+                 // It's important to close the AudioContext to release system resources.
+                 audioContext.close().catch(e => console.error("Error closing AudioContext:", e));
+                 audioContext = null;
+             }
+
+             // Stop microphone track(s)
+             if (mediaStream) {
+                 mediaStream.getTracks().forEach(track => track.stop());
+                 mediaStream = null;
+             }
+
+            isRecording = false;
+            recordButton.textContent = 'Start Recording';
+            recordButton.classList.replace('bg-red-500', 'bg-blue-500');
+            recordButton.classList.replace('hover:bg-red-600', 'hover:bg-blue-600');
+
+            // Update status only if WebSocket is still open, otherwise let onclose handle it
+            if (websocket && websocket.readyState === WebSocket.OPEN) {
+                 setStatus('Connected. Ready to record.', 'text-green-600');
+            } else if (!websocket || websocket.readyState === WebSocket.CLOSED) {
+                 setStatus('Disconnected', 'text-gray-600');
+                 recordButton.disabled = true; // Can't record if disconnected
+            } else {
+                 // Still connecting or closing
+                 // Status will be updated by WS events
+            }
+        }
+
+        // --- UI Update Functions ---
+        function setStatus(message, colorClass = 'text-gray-600') {
+            statusDiv.textContent = `Status: ${message}`;
+            // Remove previous color classes
+            statusDiv.classList.remove('text-gray-600', 'text-yellow-600', 'text-green-600', 'text-red-600', 'recording-indicator');
+            // Add the new color class
+            if (colorClass) {
+                statusDiv.classList.add(colorClass);
+            }
+             // Add pulsing indicator specifically for recording status
+            if (message === 'Recording...') {
+                statusDiv.classList.add('recording-indicator');
+            }
+        }
+
+        function setError(message) {
+            errorOutputDiv.textContent = message;
+             if (message) {
+                 console.error("Error displayed:", message);
+             }
+        }
+
+        // --- Event Listeners ---
+        recordButton.addEventListener('click', () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        // --- Initial Setup ---
+        recordButton.disabled = true; // Disabled until WebSocket connects
+        setStatus('Initializing...', 'text-gray-600');
+        connectWebSocket(); // Attempt to connect on page load
+
+         // Graceful shutdown on page close
+         window.addEventListener('beforeunload', () => {
+             stopRecording();
+             if (websocket && websocket.readyState === WebSocket.OPEN) {
+                 websocket.close(1000, "Page closed"); // Normal closure
+             }
+         });
+
+    </script>
+</body>
+</html>

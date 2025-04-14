@@ -18,9 +18,13 @@ from datetime import datetime
 import io
 import torch
 import json
+
 from vad import (VADIterator,read_audio)
 from utils_vad import (get_speech_timestamps)
+from prompts import prompt_template_asr, prompt_template_ast
 
+asr_model = "gemini-1.5-flash-002"
+TARGET_LANGUAGE = 'English'
 # wav = read_audio("vad-test.wav", 16000)
 # model1 = torch.jit.load('silero_vad/silero_vad.jit')
 
@@ -109,7 +113,10 @@ class TranscriptionServer:
                     is_final = is_final,
                     alternatives = [stt__pb2.Alternative(
                         transcript = segment['transcript'],
+                        translation = segment['translation'],
+                        # confidence = segment['translation'],
                         confidence = 0.2
+                        
                     )]))
                 if is_final:
                     print(f"11111: {segment['transcript']}")
@@ -225,8 +232,16 @@ class TranscriptionServer:
             #transcribe_thread_submit = self.transcribe(transcripted_base64_content, language_code)
             transcript_json_result = await self.transcribe_by_gemini(transcripted_base64_content, LANGUAGE_CODE_DIC[language_code])
             transcript_segment = self.find_first_no_transcript_segment(current_transcript_segments)
+            translation_json_result = None
+            if 'end' in segment:
+                translation_json_result = await self.transcribe_and_translate_by_gemini(transcripted_base64_content, LANGUAGE_CODE_DIC[language_code], TARGET_LANGUAGE)
+
             if None != transcript_segment:
                 transcript_segment['transcript'] = transcript_json_result
+                transcript_segment['translation'] = None
+                if None != translation_json_result:
+                    transcript_segment['translation'] = translation_json_result
+
         #logger.info(current_transcript_segments)
         #TODO: should resolve the segments == 0 issues.
         if len(current_transcript_segments) == 0:
@@ -322,49 +337,7 @@ class TranscriptionServer:
     # transcribe by gemini
     async def transcribe_by_gemini(self, audio_base64,
         language):
-        prompt_template = """You are a professional AI audio transcription expert. Your task is to accurately transcribe audio into {language}.
-
-**Workflow:**
-
-1.  **Language Identification:** Determine the language spoken in the audio.
-2.  **Raw Transcription:** Transcribe the audio verbatim in {language}, including:
-    * All spoken words.
-    * Foreign nouns and entities (e.g., place names, celebrity names) exactly as spoken.
-3.  **Noise Processing:**
-    * Detect noise segments within the audio.
-    * Ignore the noise segments; do not transcribe them.
-4.  **Refined Transcription:** Improve the raw transcription with the following:
-    * Base the refined transcription on the Raw Transcription from step 2.
-    * Preserve the original content as much as possible.
-    * Correct homophones based on context.
-    * Remove non-speech sounds (music, noise), but retain human non-sense words.
-    * Apply accurate punctuation.
-    * Do not add to or interpret the audio content.
-5.  **Output Blacklist:** Exclude "屁", "삐", "哔", "beep", "P" from sentence endings.
-6.  **Empty Audio Handling:** If the audio is empty or contains no human speech, return "NULL".
-
-**Output Format:**
-Deliver your results in a JSON format with the following key-value pairs:
-'''json
-{{
- "Transcription": "Transcription in {language}",
- "Fluent_Transcription": "A fixed version of the transcription"
-}}
-'''
-
-Example:
-If the audio contains the sentence "Um, like, the cat, uh, jumped over the, uh, fence 哔, beep, 삐, P, 屁.", the output should be:
-
-'''json
-{{
- "Transcription": "Um, like, the cat, uh, jumped over the, uh, fence 哔, beep, ",
- "Fluent_Transcription": "Um, like, the cat, uh, jumped over the, uh, fence."
-}}
-'''
-The audio file might be empty and you can't hear any human voice. In this scenario, return string "NULL".
-
-Below is the input of the audio file:
-"""
+        
         generation_config = {
             "max_output_tokens": 256,
             "temperature": 0.1,
@@ -382,10 +355,10 @@ Below is the input of the audio file:
         start_time = (int)(datetime.now().timestamp() * 1000)
         vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
         model = GenerativeModel(
-            "gemini-1.5-flash-002",
+            asr_model,
             system_instruction=["""Do not recite the information directly from training."""],
         )
-        prompt_contents = [prompt_template.format(language=language), Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64))]
+        prompt_contents = [prompt_template_asr.format(language=language), Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64))]
 
         loop = asyncio.get_running_loop() 
         response_task = asyncio.create_task(self.call_gemini(prompt_contents,generation_config,safety_settings,model))
@@ -401,6 +374,46 @@ Below is the input of the audio file:
         gemini_used_time = end_time - start_time
         logger.info(f"transcript by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, transcript={transcript}")
         return self.process_ununsed(transcript)
+    
+    async def transcribe_and_translate_by_gemini(self, audio_base64,
+        source_language,target_language):
+        
+        generation_config = {
+            "max_output_tokens": 256,
+            "temperature": 0.1,
+            "top_p": 0.95,
+            "response_mime_type":"application/json"
+        }
+
+        safety_settings = {
+            generative_models.HarmCategory.HARM_CATEGORY_HATE_SPEECH: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+            generative_models.HarmCategory.HARM_CATEGORY_HARASSMENT: generative_models.HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        start_time = (int)(datetime.now().timestamp() * 1000)
+        vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
+        model = GenerativeModel(
+            asr_model,
+            system_instruction=["""Do not recite the information directly from training."""],
+        )
+        prompt_contents = [prompt_template_ast.format(source_language=source_language,target_language = target_language), Part.from_data(mime_type="audio/wav",data=base64.b64decode(audio_base64))]
+
+        loop = asyncio.get_running_loop() 
+        response_task = asyncio.create_task(self.call_gemini(prompt_contents,generation_config,safety_settings,model))
+        response = await response_task
+        transcript = ""
+        try:
+            response_results = json.loads(response.text)
+            Translation = response_results['Translation']
+        except Exception as e:
+             print(e)
+            
+        end_time = (int)(datetime.now().timestamp() * 1000)
+        gemini_used_time = end_time - start_time
+        logger.info(f"Translation by gemini start_time={start_time} end_time={end_time} gemini_used_time={gemini_used_time}, Translation={Translation}")
+        return self.process_ununsed(Translation)
 
     async def call_gemini (self, prompt_contents, generation_config, safety_settings, model):
         return model.generate_content(

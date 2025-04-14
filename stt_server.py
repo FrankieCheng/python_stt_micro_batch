@@ -7,6 +7,7 @@ import logging
 import asyncio
 import grpc
 from transcribe_server import TranscriptionServer
+from google.cloud import texttospeech
 
 FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
@@ -33,6 +34,26 @@ class Listener(stt__pb2__grpc.ListenerServicer):
             #print(f"xxxxx={result}")
             if result is not None:
                 yield result # 立即yield结果
+                for res in result.results:
+                    is_final_status = res.is_final
+                    for alt in res.alternatives:
+                        translation_text = alt.translation
+                        transcript_text = alt.transcript
+                if is_final_status:
+                    speech = text2speech(translation_text)
+                    print(type(speech))
+                    print(len(speech.audio_content))
+
+                
+                # result = result.results
+                # print(result)
+                # print( type(result))
+                # if result['is_final'] :
+                #     speech = text2speech(result[alternatives[translation]])
+                #     print(type(speech))
+                #     print(len(speech))
+                
+                #if it's final, do TTS
 
 
 async def serve(port, project, location):
@@ -42,6 +63,28 @@ async def serve(port, project, location):
         server.add_insecure_port('[::]:%d' % port)
         await server.start()
         await server.wait_for_termination()
+
+
+def text2speech(input_text):
+    client = texttospeech.TextToSpeechClient()
+    synthesis_input = texttospeech.SynthesisInput(text=input_text)
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+    )
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
+    response = client.synthesize_speech(
+      input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+    
+    return response
+    
+    
+
+    
+
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SpeechToText service')
