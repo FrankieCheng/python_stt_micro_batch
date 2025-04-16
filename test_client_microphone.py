@@ -1,6 +1,5 @@
 
 import queue
-
 import stt_pb2 as stt__pb2
 import stt_pb2_grpc as stt__pb2__grpc
 import grpc

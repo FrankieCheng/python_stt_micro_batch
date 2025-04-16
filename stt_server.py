@@ -13,6 +13,7 @@ FORMAT = '%(levelname)s: %(asctime)s: %(message)s'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('SttServer')
 
+
 class Listener(stt__pb2__grpc.ListenerServicer):
     def __init__(self, project, location) -> None:
         super().__init__()
