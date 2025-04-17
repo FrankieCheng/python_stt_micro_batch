@@ -7,6 +7,11 @@ import pyaudio
 import argparse
 import sys
 import re
+from google.cloud import texttospeech
+
+import io
+from pydub import AudioSegment
+from pydub.playback import play
 
 # Audio recording parameters
 SAMPLING_RATE = 16000
@@ -163,7 +168,24 @@ def listen_print_loop(responses: object, stream: object) -> None:
         if result.is_final:
             sys.stdout.write(GREEN)
             sys.stdout.write("\033[K")
-            sys.stdout.write(": " + transcript + "\n")
+            sys.stdout.write("transcription: " + transcript + "\n")
+            if result.alternatives[0].translation:
+                translation = result.alternatives[0].translation
+                sys.stdout.write("translation: " + translation + "\n")
+                # --- Play the translated audio ---
+                print(f"{YELLOW}Generating speech for: {translation}{GREEN}")
+                speech_response = text2speech(translation)
+                if speech_response and speech_response.audio_content:
+                    try:
+                        print(f"{YELLOW}Playing synthesized speech...{GREEN}")
+                        # Load the MP3 data from bytes into an AudioSegment
+                        audio_segment = AudioSegment.from_file(io.BytesIO(speech_response.audio_content), format="mp3")
+                        # Play the audio
+                        play(audio_segment)
+                        print(f"{YELLOW}Playback finished.{GREEN}")
+                    except Exception as e:
+                        print(f"{RED}Error playing audio: {e}{GREEN}")
+                # --- End Play audio ---
 
             stream.last_transcript_was_final = True
 
@@ -180,7 +202,22 @@ def listen_print_loop(responses: object, stream: object) -> None:
             sys.stdout.write(": " + transcript + "\r")
 
             stream.last_transcript_was_final = False
-
+            
+            
+def text2speech(input_text):
+    client = texttospeech.TextToSpeechClient()
+    synthesis_input = texttospeech.SynthesisInput(text=input_text)
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+    )
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
+    response = client.synthesize_speech(
+      input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+    
+    return response
 def main() -> None:
     """Transcribe speech from audio file."""
     parser = argparse.ArgumentParser(description='Client to test the STT service')
