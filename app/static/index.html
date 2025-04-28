@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Speech Translation</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f0f0f0; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        #controls button { padding: 10px 15px; margin: 5px; font-size: 1em; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; }
+        #startRecBtn { background-color: #28a745; color: white; }
+        #stopRecBtn { background-color: #dc3545; color: white; }
+        #languageSelect { padding: 10px; font-size: 1em; margin-right: 10px; border-radius: 5px; }
+        .log-area { margin-top: 20px; padding: 10px; border: 1px solid #ddd; height: 300px; overflow-y: scroll; background-color: #f9f9f9; border-radius: 5px; }
+        .log-entry { margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #eee; }
+        .log-entry:last-child { border-bottom: none; }
+        .transcript { color: #0056b3; }
+        .translation { color: #17a2b8; font-style: italic; }
+        .interim { color: #6c757d; }
+        .error { color: red; font-weight: bold; }
+        #status { margin-top: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Live Speech Transcription & Translation</h1>
+        <div id="controls">
+            <label for="languageSelect">Language:</label>
+            <select id="languageSelect">
+                <option value="en-US">English (US)</option>
+                <option value="zh-Hans-CN" selected>Chinese (Mandarin, Simplified)</option>
+                <option value="es-ES">Spanish (Spain)</option>
+                <option value="fr-FR">French (France)</option>
+                <option value="de-DE">German (Germany)</option>
+                <option value="ja-JP">Japanese (Japan)</option>
+                </select>
+            <button id="startRecBtn">Start Recording</button>
+            <button id="stopRecBtn" disabled>Stop Recording</button>
+        </div>
+        <div id="status">Status: Idle</div>
+        <div class="log-area" id="outputLog"></div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

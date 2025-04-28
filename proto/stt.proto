@@ -11,43 +11,48 @@ service Listener {
 
 // speech recognition config (fields are optional by default in proto3)
 message RecognitionConfig {
-	repeated string language_codes = 1;
+  repeated string language_codes = 1;
+  // Consider adding other common RecognitionConfig fields if your server uses them,
+  // e.g., sample_rate_hertz, enable_automatic_punctuation, etc.
+  // int32 sample_rate_hertz = 2; // Example
 }
 
 message StreamingConfig {
   RecognitionConfig config = 1;
+  // bool interim_results = 2; // If you want to explicitly control this
 }
 
-message StreamingRecognizeRequest {
+message StreamingRecognizeRequest { // This is a wrapper for config within SpeechChunkRequest
   StreamingConfig streaming_config = 1;
 }
 
 message AudioRequest {
-	bytes audio = 1;
+  bytes audio = 1;
 }
 
 // audio chunk
 message SpeechChunkRequest {
-	AudioRequest content = 1;
-  StreamingRecognizeRequest config = 2;
+  AudioRequest content = 1;        // Contains the audio bytes
+  StreamingRecognizeRequest config = 2; // Contains the config (language codes, etc.)
 }
 
 // alternative.
 message Alternative {
   string transcript = 1;
-	float confidence = 2;
+  float confidence = 2;
   string translation = 3;
+  bytes synthesized_speech_audio = 4; // <<<--- NEW FIELD ADDED HERE
 }
 
 // results in the stream.
 message TranscriptStreamResult {
-  int32 result_end_offset = 1;
+  int32 result_end_offset = 1; // This is likely a timestamp or duration, ensure server populates it if client uses it.
   bool is_final = 2;
   repeated Alternative alternatives = 3;
 }
 
 // whole response
 message TranscriptStreamResponse {
-  int32 speech_event_offset = 1;
+  int32 speech_event_offset = 1; // Likely a timestamp, ensure server populates it if client uses it.
   repeated TranscriptStreamResult results = 2;
 }
