@@ -396,6 +396,7 @@ class TranscriptionServer:
                     generation_config=generation_config, safety_settings=safety_settings, stream=False
                 )
             )
+            
             return response
         except Exception as e:
             logger.error(f"Gemini Call: Error during generate_content: {e}", exc_info=True)
@@ -418,6 +419,7 @@ class TranscriptionServer:
         
         transcript = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
+        logger.info(f"Gemini Call transcribe: Response received: {response}")
 
         if response and hasattr(response, 'text'):
             try:
@@ -453,6 +455,7 @@ class TranscriptionServer:
             
         translation = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
+        logger.info(f"Gemini Call transcribe and translate: Response received: {response}")
 
         if response and hasattr(response, 'text'):
             try:
