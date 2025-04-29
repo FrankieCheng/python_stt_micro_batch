@@ -80,7 +80,7 @@ def perform_google_cloud_connectivity_tests(project_id, location):
 
 class TranscriptionServer:
     SAMPLING_RATE = 16000
-    WINDOW_SIZE_SAMPLES = 1536
+    WINDOW_SIZE_SAMPLES = 1024
     SPEECH_THRESHOLD = 0.5 # VAD threshold used in process_new_chunks direct check
 
     def __init__(self, project_id, location, recognizer_id_str):
@@ -120,7 +120,7 @@ class TranscriptionServer:
         self.all_chunks = torch.tensor([])
         # This threshold is for VADIterator. Ensure it aligns with SPEECH_THRESHOLD if they mean the same.
         self.vad_speech_threshold_iterator = 0.5 # Renamed for clarity if it's different from SPEECH_THRESHOLD
-        self.min_silence_duration_ms = 100
+        self.min_silence_duration_ms = 200
         self.vad_iterator = VADIterator(model=self.vad_model, threshold=self.vad_speech_threshold_iterator,
                                         sampling_rate=self.SAMPLING_RATE,
                                         min_silence_duration_ms=self.min_silence_duration_ms)
@@ -410,7 +410,7 @@ class TranscriptionServer:
         start_time_ms = int(datetime.now().timestamp() * 1000) # Corrected to use ms consistently
 
         # ... (generation_config, safety_settings, prompt_contents setup as before) ...
-        generation_config = {"max_output_tokens": 256, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
+        generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
         from prompts import prompt_template_asr
         prompt = prompt_template_asr.format(language=language_name)
@@ -445,7 +445,7 @@ class TranscriptionServer:
         start_time_ms = int(datetime.now().timestamp() * 1000)
 
         # ... (generation_config, safety_settings, prompt_contents setup as before) ...
-        generation_config = {"max_output_tokens": 256, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
+        generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
         from prompts import prompt_template_ast
         prompt = prompt_template_ast.format(source_language=source_language_name, target_language=target_language_name)
