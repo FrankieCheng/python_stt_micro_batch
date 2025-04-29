@@ -55,7 +55,8 @@ function logMessage(data) {
     } else if (data.type === 'error') {
         content = `<span class="error">Error: ${data.message}</span>`;
     } else if (data.type === 'info') {
-         content = `<span>INFO: ${data.message}</span>`;
+        entry.classList.add('info'); // Add this line
+        content = `<span>INFO: ${data.message}</span>`;
     } else {
         // For debugging, show the whole data object if it's an unknown type
         content = `<span>UNKNOWN DATA: ${JSON.stringify(data)}</span>`;

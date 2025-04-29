@@ -9,6 +9,7 @@ import numpy as np
 import json
 from datetime import datetime
 import grpc # Added for grpc.RpcError
+import os
 
 from google.api_core.client_options import ClientOptions
 from google.cloud.speech_v2 import SpeechClient
@@ -294,6 +295,19 @@ class TranscriptionServer:
                 segment_to_process['translation'] = ""
                 output_segments_with_results.append(segment_to_process)
                 continue
+            # +++ MODIFICATION: SAVE AUDIO SEGMENT +++
+            
+            try:
+                debug_audio_dir = "debug_audio_clips"
+                if not os.path.exists(debug_audio_dir):
+                    os.makedirs(debug_audio_dir)
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename = os.path.join(debug_audio_dir, f"to_gemini_{timestamp_str}_s{current_start_index}_e{current_end_index}.wav")
+                self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename)
+                logger.info(f"Saved debug audio segment for Gemini to: {filename}")
+            except Exception as save_e:
+                logger.error(f"Failed to save debug audio segment: {save_e}", exc_info=True)
+            # +++ END MODIFICATION +++
 
             transcripted_base64_content = self.tensor_to_base64(torch_segment_chunks, self.SAMPLING_RATE)
             target_gemini_language = LANGUAGE_CODE_DIC.get(language_code, "English")
