@@ -24,6 +24,8 @@ import stt_pb2 as stt__pb2 # Your protobuf definitions
 from vad import VADIterator # Assuming these are your local VAD utilities
 # from utils_vad import get_speech_timestamps # This was commented out in your provided code
 
+from prompts import prompt_template_ast, prompt_template_asr
+
 # Global model name from your code
 asr_model_name_gemini = "gemini-1.5-flash-002" # Renamed for clarity
 TARGET_LANGUAGE = 'English' # You can make this configurable
@@ -280,7 +282,7 @@ class TranscriptionServer:
                 logger.warning(f"Skipping invalid segment: start={current_start_index}, end={current_end_index}")
                 continue
 
-            logger.info(f"Processing segment for ASR/AST: start={current_start_index}, end={current_end_index}")
+            logger.info(f"Processing segment for ASR: start={current_start_index}, end={current_end_index}")
             torch_segment_chunks = self.all_chunks[current_start_index:current_end_index] 
             
             segment_to_process['stt_duration'] = 0
@@ -305,6 +307,8 @@ class TranscriptionServer:
             # Perform translation if the segment is final and transcription was successful
             if 'end' in segment_to_process and transcript_text: 
                 logger.info(f"Segment is final, attempting translation. Source: {target_gemini_language}, Target: {TARGET_LANGUAGE}")
+                logger.info(f"Processing segment for AST: start={current_start_index}, end={current_end_index}")
+
                 if target_gemini_language != TARGET_LANGUAGE:
                     translation_text, translation_duration = await self.transcribe_and_translate_by_gemini(
                         transcripted_base64_content,
@@ -413,13 +417,13 @@ class TranscriptionServer:
         # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
-        from prompts import prompt_template_asr
+        
         prompt = prompt_template_asr.format(language=language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
         
         transcript = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
-        logger.info(f"Gemini Call transcribe: Response received: {response}")
+        logger.info(f"Gemini Call transcribe: Response received: {response.text}")
 
         if response and hasattr(response, 'text'):
             try:
@@ -449,13 +453,13 @@ class TranscriptionServer:
         # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
-        from prompts import prompt_template_ast
+        
         prompt = prompt_template_ast.format(source_language=source_language_name, target_language=target_language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
             
         translation = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
-        logger.info(f"Gemini Call transcribe and translate: Response received: {response}")
+        logger.info(f"Gemini Call transcribe and translate: Response received: {response.text}")
 
         if response and hasattr(response, 'text'):
             try:
