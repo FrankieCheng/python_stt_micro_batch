@@ -123,7 +123,7 @@ class TranscriptionServer:
         self.all_chunks = torch.tensor([])
         # This threshold is for VADIterator. Ensure it aligns with SPEECH_THRESHOLD if they mean the same.
         self.vad_speech_threshold_iterator = 0.5 # Renamed for clarity if it's different from SPEECH_THRESHOLD
-        self.min_silence_duration_ms = 200
+        self.min_silence_duration_ms = 400
         self.vad_iterator = VADIterator(model=self.vad_model, threshold=self.vad_speech_threshold_iterator,
                                         sampling_rate=self.SAMPLING_RATE,
                                         min_silence_duration_ms=self.min_silence_duration_ms)
