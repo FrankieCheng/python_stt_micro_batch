@@ -84,7 +84,7 @@ def perform_google_cloud_connectivity_tests(project_id, location):
 class TranscriptionServer:
     SAMPLING_RATE = 16000
     WINDOW_SIZE_SAMPLES = 1024
-    SPEECH_THRESHOLD = 0.5 # VAD threshold used in process_new_chunks direct check
+    SPEECH_THRESHOLD = 0.3 # VAD threshold used in process_new_chunks direct check
 
     def __init__(self, project_id, location, recognizer_id_str):
         logger.info(f"Initializing TranscriptionServer with project='{project_id}', location='{location}', recognizer_id='{recognizer_id_str}'")
