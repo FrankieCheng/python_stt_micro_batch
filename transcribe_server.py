@@ -140,42 +140,42 @@ class TranscriptionServer:
             logger.error(f"Error in recv_audio_bytes: {e}", exc_info=True)
             return None
 
-def recv_audio_output(self, current_transcript_segments):
-    if current_transcript_segments and len(current_transcript_segments) > 0:
-        transcript_stream_results_list = []
-        first_start_offset = current_transcript_segments[0].get('start', 0)
+    def recv_audio_output(self, current_transcript_segments):
+        if current_transcript_segments and len(current_transcript_segments) > 0:
+            transcript_stream_results_list = []
+            first_start_offset = current_transcript_segments[0].get('start', 0)
 
-        for segment in current_transcript_segments:
-            result_end_offset_val = segment.get('end', segment.get('immediate', 0))
-            is_final_val = 'end' in segment
-            transcript_val = segment.get('transcript', "")
-            translation_val = segment.get('translation', "")
-            confidence_val = segment.get('confidence', 0.2) # Default if not set
-            
-            stt_duration_val = segment.get('stt_duration', 0) # Get STT duration
-            translation_duration_val = segment.get('translation_duration', 0) # Get translation duration
+            for segment in current_transcript_segments:
+                result_end_offset_val = segment.get('end', segment.get('immediate', 0))
+                is_final_val = 'end' in segment
+                transcript_val = segment.get('transcript', "")
+                translation_val = segment.get('translation', "")
+                confidence_val = segment.get('confidence', 0.2) # Default if not set
+                
+                stt_duration_val = segment.get('stt_duration', 0) # Get STT duration
+                translation_duration_val = segment.get('translation_duration', 0) # Get translation duration
 
-            alternatives_list = [stt__pb2.Alternative(
-                transcript=transcript_val,
-                translation=translation_val,
-                confidence=confidence_val,
-                stt_duration_ms=stt_duration_val,                 # SET PROTO FIELD
-                translation_duration_ms=translation_duration_val  # SET PROTO FIELD
-                # tts_duration_ms will be set by stt_server.py
-            )]
-            
-            transcript_stream_results_list.append(stt__pb2.TranscriptStreamResult(
-                result_end_offset=int(result_end_offset_val),
-                is_final=is_final_val,
-                alternatives=alternatives_list
-            ))
-        return stt__pb2.TranscriptStreamResponse(
-            speech_event_offset=int(first_start_offset),
-            results=transcript_stream_results_list
-        )
-    else:
-        logger.debug("recv_audio_output called with no segments.")
-        return None
+                alternatives_list = [stt__pb2.Alternative(
+                    transcript=transcript_val,
+                    translation=translation_val,
+                    confidence=confidence_val,
+                    stt_duration_ms=stt_duration_val,                 # SET PROTO FIELD
+                    translation_duration_ms=translation_duration_val  # SET PROTO FIELD
+                    # tts_duration_ms will be set by stt_server.py
+                )]
+                
+                transcript_stream_results_list.append(stt__pb2.TranscriptStreamResult(
+                    result_end_offset=int(result_end_offset_val),
+                    is_final=is_final_val,
+                    alternatives=alternatives_list
+                ))
+            return stt__pb2.TranscriptStreamResponse(
+                speech_event_offset=int(first_start_offset),
+                results=transcript_stream_results_list
+            )
+        else:
+            logger.debug("recv_audio_output called with no segments.")
+            return None
     
     async def process_new_chunks(self, current_chunks, language_code):
         last_round_end = ((int)(len(self.all_chunks)/self.WINDOW_SIZE_SAMPLES))*self.WINDOW_SIZE_SAMPLES
