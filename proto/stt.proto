@@ -42,7 +42,11 @@ message Alternative {
   float confidence = 2;
   string translation = 3;
   bytes synthesized_speech_audio = 4; // <<<--- NEW FIELD ADDED HERE
+  int32 stt_duration_ms = 5;           // Duration for STT for this alternative
+  int32 translation_duration_ms = 6;   // Duration for translation for this alternative
+  int32 tts_duration_ms = 7;           // Duration for TTS for this alternative
 }
+
 
 // results in the stream.
 message TranscriptStreamResult {

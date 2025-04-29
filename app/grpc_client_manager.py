@@ -83,14 +83,16 @@ async def stream_audio_to_grpc(audio_chunk_iterator, language_code: str):
                         data_for_websocket = {
                             "type": "transcription",
                             "transcript": alt.transcript,
-                            "confidence": alt.confidence, # Include confidence
+                            "confidence": alt.confidence,
                             "translation": alt.translation if alt.translation else None,
                             "is_final": result_item.is_final,
-                            "audio_data_b64": b64_audio_content,
-                            "audio_format": audio_format,
-                            # You can also include result_end_offset and speech_event_offset if useful for client
-                            # "result_end_offset": result_item.result_end_offset,
-                            # "speech_event_offset": response_from_grpc.speech_event_offset,
+                            "audio_data_b64": b64_audio_content, # Assuming this is populated correctly
+                            "audio_format": audio_format,        # Assuming this is populated correctly
+                            
+                            # Add the new duration fields
+                            "stt_duration_ms": alt.stt_duration_ms if hasattr(alt, 'stt_duration_ms') else None,
+                            "translation_duration_ms": alt.translation_duration_ms if hasattr(alt, 'translation_duration_ms') else None,
+                            "tts_duration_ms": alt.tts_duration_ms if hasattr(alt, 'tts_duration_ms') else None,
                         }
                         yield data_for_websocket
             # else:

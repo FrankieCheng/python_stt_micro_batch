@@ -11,8 +11,12 @@ let mediaStream;
 let scriptProcessorNode;
 let audioPlayer = new Audio(); // For playing received MP3s
 
-const TARGET_SAMPLE_RATE = 16000; // Your gRPC server expects this (from SAMPLING_RATE = 16000)
-const BUFFER_SIZE = 16384; // A common buffer size for ScriptProcessorNode
+const TARGET_SAMPLE_RATE = 16000;
+// const BUFFER_SIZE = 4096; // For ~256ms chunks from client
+// const BUFFER_SIZE = 8192;   // For ~512ms chunks from client (as per recent discussion)
+const BUFFER_SIZE = 16384; // Current in your file: for ~1024ms chunks from client
+
+let lastSendTime = 0; // To track send time for RTT (approximate)
 
 function logMessage(data) {
     const entry = document.createElement('div');
@@ -21,7 +25,29 @@ function logMessage(data) {
     let content = '';
     if (data.type === 'transcription') {
         const confidenceScore = data.confidence ? data.confidence.toFixed(2) : 'N/A';
-        content = `<span class="${data.is_final ? 'transcript' : 'transcript interim'}">Transcript: ${data.transcript} </span>`;
+        
+        // --- Timing Information Display ---
+        let timingDetails = [];
+        if (data.stt_duration_ms) {
+            timingDetails.push(`STT: ${data.stt_duration_ms}ms`);
+        }
+        if (data.translation_duration_ms) { // Assuming server might send this
+            timingDetails.push(`Translate: ${data.translation_duration_ms}ms`);
+        }
+        if (data.tts_duration_ms) {
+            timingDetails.push(`TTS: ${data.tts_duration_ms}ms`);
+        }
+        // Approximate RTT if we had sendTime (more complex to correlate accurately in stream)
+        // if (data.is_final && lastSendTime > 0) {
+        //     const rtt = performance.now() - lastSendTime;
+        //     timingDetails.push(`Approx. RTT: ${rtt.toFixed(0)}ms`);
+        //     lastSendTime = 0; // Reset for next final segment
+        // }
+        
+        let timingString = timingDetails.length > 0 ? ` <small>[${timingDetails.join(', ')}]</small>` : '';
+        // --- End Timing Information Display ---
+
+        content = `<span class="${data.is_final ? 'transcript' : 'transcript interim'}">Transcript: ${data.transcript}${timingString}</span>`;
         if (data.translation) {
             content += `<br><span class="translation">Translation: ${data.translation}</span>`;
         }
@@ -31,7 +57,9 @@ function logMessage(data) {
     } else if (data.type === 'info') {
          content = `<span>INFO: ${data.message}</span>`;
     } else {
-        content = `<span>${JSON.stringify(data)}</span>`;
+        // For debugging, show the whole data object if it's an unknown type
+        content = `<span>UNKNOWN DATA: ${JSON.stringify(data)}</span>`;
+        console.warn("Received unknown data structure:", data);
     }
     entry.innerHTML = content;
     outputLog.appendChild(entry);
@@ -47,10 +75,14 @@ function updateStatus(message) {
 }
 
 function playMp3FromBase64(base64String) {
+    const playbackStartTime = performance.now();
     logMessage({ type: 'info', message: 'Attempting to play synthesized audio...' });
     audioPlayer.src = `data:audio/mp3;base64,${base64String}`;
     audioPlayer.play()
-        .then(() => logMessage({ type: 'info', message: 'Audio playback started.' }))
+        .then(() => {
+            const playbackSetupTime = performance.now() - playbackStartTime;
+            logMessage({ type: 'info', message: `Audio playback started. (Setup: ${playbackSetupTime.toFixed(0)}ms)` });
+        })
         .catch(e => {
             logMessage({ type: 'error', message: `Audio playback error: ${e.message}` });
             console.error("Audio playback error:", e);
@@ -74,37 +106,33 @@ startRecBtn.onclick = async () => {
         updateStatus('Microphone access granted. Initializing audio processing...');
 
         audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: TARGET_SAMPLE_RATE // Try to request the target sample rate
+            sampleRate: TARGET_SAMPLE_RATE
         });
         
-        // Check if the context actually got the desired sample rate
         if (audioContext.sampleRate !== TARGET_SAMPLE_RATE) {
-            console.warn(`AudioContext running at ${audioContext.sampleRate}Hz, not desired ${TARGET_SAMPLE_RATE}Hz. Resampling will occur if source is different or this ScriptProcessorNode will output at this rate.`);
-            // The ScriptProcessorNode will output at audioContext.sampleRate
+            console.warn(`AudioContext running at ${audioContext.sampleRate}Hz, not target ${TARGET_SAMPLE_RATE}Hz. Input will be at ${audioContext.sampleRate}Hz from ScriptProcessorNode.`);
         }
 
-
         const source = audioContext.createMediaStreamSource(mediaStream);
-        scriptProcessorNode = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1); // Buffer size, input channels, output channels
+        // The bufferSize for createScriptProcessor must be a power of 2, from 256 to 16384.
+        // 4096 samples @ 16kHz = 256ms
+        // 8192 samples @ 16kHz = 512ms
+        // 16384 samples @ 16kHz = 1024ms
+        scriptProcessorNode = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
         scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
             if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
 
             const inputBuffer = audioProcessingEvent.inputBuffer;
+            // Get data for the first channel
             const pcmData = inputBuffer.getChannelData(0); // Float32 PCM data
 
-            // Your original client sent paFloat32. A Float32Array's underlying buffer can be sent directly.
-            // The server side (gRPC client manager) will receive these bytes and should forward them.
-            // The gRPC server's TranscriptionServer must be able to handle these Float32 PCM bytes.
-            // If it expects 16-bit PCM, conversion would be needed here:
-            // const int16Pcm = new Int16Array(pcmData.length);
-            // for (let i = 0; i < pcmData.length; i++) {
-            //     let s = Math.max(-1, Math.min(1, pcmData[i]));
-            //     int16Pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-            // }
-            // websocket.send(int16Pcm.buffer);
-            
-            websocket.send(pcmData.buffer); // Send ArrayBuffer of Float32
+            // If input sample rate is different from TARGET_SAMPLE_RATE, resampling is needed here or on server.
+            // For simplicity, assuming inputBuffer.sampleRate matches TARGET_SAMPLE_RATE due to context hint.
+            // If not, pcmData is at audioContext.sampleRate.
+
+            // lastSendTime = performance.now(); // For RTT - more complex to correlate
+            websocket.send(pcmData.buffer); 
         };
 
         source.connect(scriptProcessorNode);
@@ -116,14 +144,14 @@ startRecBtn.onclick = async () => {
         websocket = new WebSocket(wsUrl);
 
         websocket.onopen = () => {
-            updateStatus(`Connected to server. Recording started... Language: ${selectedLanguage}`);
+            updateStatus(`Connected. Recording started... Language: ${selectedLanguage}. Sending audio in ~${((BUFFER_SIZE / TARGET_SAMPLE_RATE) * 1000).toFixed(0)}ms chunks.`);
             logMessage({type: 'info', message: `WebSocket open. Language: ${selectedLanguage}`});
         };
 
         websocket.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                logMessage(data);
+                logMessage(data); // logMessage will now display timings if present
             } catch (e) {
                 logMessage({type: 'error', message: 'Received malformed JSON from server.'});
                 console.error("Error parsing server message:", e, event.data);
@@ -138,9 +166,10 @@ startRecBtn.onclick = async () => {
 
         websocket.onerror = (error) => {
             updateStatus('WebSocket error. See console.');
-            logMessage({type: 'error', message: `WebSocket error: ${error.message || 'Unknown error'}`});
-            console.error("WebSocket error:", error);
-            cleanupAudioResources(); // Also cleanup on error
+            const errorMessage = error.message || (error.target && error.target.url ? `Could not connect to ${error.target.url}` : 'Unknown WebSocket error');
+            logMessage({type: 'error', message: `WebSocket error: ${errorMessage}`});
+            console.error("WebSocket Error: ", error);
+            cleanupAudioResources();
         };
 
     } catch (err) {
@@ -153,6 +182,7 @@ startRecBtn.onclick = async () => {
 
 function cleanupAudioResources() {
     if (scriptProcessorNode) {
+        scriptProcessorNode.onaudioprocess = null; // Stop processing audio
         scriptProcessorNode.disconnect();
         scriptProcessorNode = null;
     }
@@ -160,10 +190,13 @@ function cleanupAudioResources() {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
     }
-    if (audioContext && audioContext.state !== 'closed') {
-        audioContext.close().catch(e => console.error("Error closing AudioContext:", e));
-        audioContext = null;
-    }
+    // It's generally better not to close/recreate audioContext too often unless necessary.
+    // If you do, ensure it's fully stopped/closed.
+    // if (audioContext && audioContext.state !== 'closed') {
+    //     audioContext.close().catch(e => console.error("Error closing AudioContext:", e));
+    //     audioContext = null;
+    // }
+
     if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
         websocket.close(1000, "Client cleanup");
     }

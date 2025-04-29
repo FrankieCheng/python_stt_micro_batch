@@ -140,36 +140,42 @@ class TranscriptionServer:
             logger.error(f"Error in recv_audio_bytes: {e}", exc_info=True)
             return None
 
-    def recv_audio_output(self, current_transcript_segments):
-        if current_transcript_segments and len(current_transcript_segments) > 0:
-            transcript_stream_results_list = []
-            first_start_offset = current_transcript_segments[0].get('start', 0)
+def recv_audio_output(self, current_transcript_segments):
+    if current_transcript_segments and len(current_transcript_segments) > 0:
+        transcript_stream_results_list = []
+        first_start_offset = current_transcript_segments[0].get('start', 0)
 
-            for segment in current_transcript_segments:
-                result_end_offset_val = segment.get('end', segment.get('immediate', 0))
-                is_final_val = 'end' in segment
-                transcript_val = segment.get('transcript', "")
-                translation_val = segment.get('translation', "") 
-                confidence_val = segment.get('confidence', 0.2) 
+        for segment in current_transcript_segments:
+            result_end_offset_val = segment.get('end', segment.get('immediate', 0))
+            is_final_val = 'end' in segment
+            transcript_val = segment.get('transcript', "")
+            translation_val = segment.get('translation', "")
+            confidence_val = segment.get('confidence', 0.2) # Default if not set
+            
+            stt_duration_val = segment.get('stt_duration', 0) # Get STT duration
+            translation_duration_val = segment.get('translation_duration', 0) # Get translation duration
 
-                alternatives_list = [stt__pb2.Alternative(
-                    transcript=transcript_val,
-                    translation=translation_val,
-                    confidence=confidence_val
-                )]
-                
-                transcript_stream_results_list.append(stt__pb2.TranscriptStreamResult(
-                    result_end_offset=int(result_end_offset_val),
-                    is_final=is_final_val,
-                    alternatives=alternatives_list
-                ))
-            return stt__pb2.TranscriptStreamResponse(
-                speech_event_offset=int(first_start_offset),
-                results=transcript_stream_results_list
-            )
-        else:
-            logger.debug("recv_audio_output called with no segments.") # Changed to debug for less noise
-            return None
+            alternatives_list = [stt__pb2.Alternative(
+                transcript=transcript_val,
+                translation=translation_val,
+                confidence=confidence_val,
+                stt_duration_ms=stt_duration_val,                 # SET PROTO FIELD
+                translation_duration_ms=translation_duration_val  # SET PROTO FIELD
+                # tts_duration_ms will be set by stt_server.py
+            )]
+            
+            transcript_stream_results_list.append(stt__pb2.TranscriptStreamResult(
+                result_end_offset=int(result_end_offset_val),
+                is_final=is_final_val,
+                alternatives=alternatives_list
+            ))
+        return stt__pb2.TranscriptStreamResponse(
+            speech_event_offset=int(first_start_offset),
+            results=transcript_stream_results_list
+        )
+    else:
+        logger.debug("recv_audio_output called with no segments.")
+        return None
     
     async def process_new_chunks(self, current_chunks, language_code):
         last_round_end = ((int)(len(self.all_chunks)/self.WINDOW_SIZE_SAMPLES))*self.WINDOW_SIZE_SAMPLES
@@ -266,7 +272,6 @@ class TranscriptionServer:
 
         # This list will be populated with transcript/translation and sent as response
         output_segments_with_results = []
-
         for segment_to_process in valid_segments_for_transcription:
             current_start_index = segment_to_process['start']
             current_end_index = segment_to_process.get('end', segment_to_process.get('immediate'))
@@ -276,8 +281,10 @@ class TranscriptionServer:
                 continue
 
             logger.info(f"Processing segment for ASR/AST: start={current_start_index}, end={current_end_index}")
-            # Slices from the original self.all_chunks which accumulates all audio for the stream
             torch_segment_chunks = self.all_chunks[current_start_index:current_end_index] 
+            
+            segment_to_process['stt_duration'] = 0
+            segment_to_process['translation_duration'] = 0
             
             if torch_segment_chunks.numel() == 0:
                 logger.warning(f"Segment resulted in empty torch_chunks: start={current_start_index}, end={current_end_index}")
@@ -287,33 +294,33 @@ class TranscriptionServer:
                 continue
 
             transcripted_base64_content = self.tensor_to_base64(torch_segment_chunks, self.SAMPLING_RATE)
-            
             target_gemini_language = LANGUAGE_CODE_DIC.get(language_code, "English")
 
             # Perform transcription
-            transcript_text = await self.transcribe_by_gemini(transcripted_base64_content, target_gemini_language)
+            transcript_text, stt_duration = await self.transcribe_by_gemini(transcripted_base64_content, target_gemini_language)
             segment_to_process['transcript'] = transcript_text
-            logger.info(f"Segment transcript: '{transcript_text}'")
+            segment_to_process['stt_duration'] = stt_duration
+            logger.info(f"Segment transcript: '{transcript_text}' (STT Duration: {stt_duration}ms)")
 
             # Perform translation if the segment is final and transcription was successful
-            # 'end' in segment_to_process signifies a VAD-determined final boundary for that utterance part
             if 'end' in segment_to_process and transcript_text: 
                 logger.info(f"Segment is final, attempting translation. Source: {target_gemini_language}, Target: {TARGET_LANGUAGE}")
                 if target_gemini_language != TARGET_LANGUAGE:
-                    translation_text = await self.transcribe_and_translate_by_gemini(
+                    translation_text, translation_duration = await self.transcribe_and_translate_by_gemini(
                         transcripted_base64_content,
                         target_gemini_language,
                         TARGET_LANGUAGE
                     )
                     segment_to_process['translation'] = translation_text
-                    logger.info(f"Segment translation: '{translation_text}'")
+                    segment_to_process['translation_duration'] = translation_duration
+                    logger.info(f"Segment translation: '{translation_text}' (Translate Duration: {translation_duration}ms)")
                 else:
-                    # If source and target languages are the same, use the transcript as "translation" or leave empty
                     segment_to_process['translation'] = transcript_text 
+                    segment_to_process['translation_duration'] = 0 
                     logger.info(f"Source and target language for translation are the same ('{TARGET_LANGUAGE}').")
             else:
-                # For 'immediate' segments or if transcription failed, no translation for now
                 segment_to_process['translation'] = "" 
+                segment_to_process['translation_duration'] = 0
             
             output_segments_with_results.append(segment_to_process)
 
@@ -397,56 +404,72 @@ class TranscriptionServer:
     async def transcribe_by_gemini(self, audio_base64_wav, language_name):
         if not self.gemini_model_instance:
             logger.error("Gemini ASR: Gemini model not initialized. Cannot transcribe.")
-            return ""
+            return "", 0 # Return text and duration
+        
         logger.info(f"Gemini ASR: Transcribing for lang '{language_name}'. Data length (b64): {len(audio_base64_wav)}")
-        start_time_ms = int(datetime.now().timestamp() * 1000)
+        start_time_ms = int(datetime.now().timestamp() * 1000) # Corrected to use ms consistently
+
+        # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 256, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
         from prompts import prompt_template_asr
         prompt = prompt_template_asr.format(language=language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
+        
         transcript = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
+
         if response and hasattr(response, 'text'):
             try:
                 response_results = json.loads(response.text)
                 transcript = response_results.get('Fluent_Transcription', "")
+            # ... (error handling as before) ...
             except json.JSONDecodeError:
                 logger.error(f"Gemini ASR: Failed to parse JSON from response: {response.text}")
             except Exception as e:
                 logger.error(f"Gemini ASR: Error processing Gemini response: {e}", exc_info=True)
         else:
             logger.warning("Gemini ASR: No valid response received from Gemini model.")
+
         end_time_ms = int(datetime.now().timestamp() * 1000)
-        logger.info(f"Gemini ASR: Transcript='{transcript}', Duration={end_time_ms - start_time_ms}ms")
-        return self.process_ununsed(transcript)
+        duration_ms = end_time_ms - start_time_ms # This is the duration
+        logger.info(f"Gemini ASR: Transcript='{transcript}', Duration={duration_ms}ms")
+        return self.process_ununsed(transcript), duration_ms # RETURN TUPLE
 
     async def transcribe_and_translate_by_gemini(self, audio_base64_wav, source_language_name, target_language_name):
         if not self.gemini_model_instance:
             logger.error("Gemini AST: Gemini model not initialized. Cannot process.")
-            return ""
+            return "", 0 # Return text and duration
+
         logger.info(f"Gemini AST: Translating from '{source_language_name}' to '{target_language_name}'. Data length (b64): {len(audio_base64_wav)}")
         start_time_ms = int(datetime.now().timestamp() * 1000)
+
+        # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 256, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
         from prompts import prompt_template_ast
         prompt = prompt_template_ast.format(source_language=source_language_name, target_language=target_language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
+            
         translation = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
+
         if response and hasattr(response, 'text'):
             try:
                 response_results = json.loads(response.text)
                 translation = response_results.get('Translation', "")
+            # ... (error handling as before) ...
             except json.JSONDecodeError:
                 logger.error(f"Gemini AST: Failed to parse JSON from response: {response.text}")
             except Exception as e:
                 logger.error(f"Gemini AST: Error processing Gemini response: {e}", exc_info=True)
         else:
             logger.warning("Gemini AST: No valid response received from Gemini model.")
+                
         end_time_ms = int(datetime.now().timestamp() * 1000)
-        logger.info(f"Gemini AST: Translation='{translation}', Duration={end_time_ms - start_time_ms}ms")
-        return self.process_ununsed(translation)
+        duration_ms = end_time_ms - start_time_ms # This is the duration
+        logger.info(f"Gemini AST: Translation='{translation}', Duration={duration_ms}ms")
+        return self.process_ununsed(translation), duration_ms # RETURN TUPLE
 
     def process_ununsed(self, txt):
         if not isinstance(txt, str):
