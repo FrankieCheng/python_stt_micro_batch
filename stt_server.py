@@ -4,6 +4,7 @@ import argparse
 import logging
 import asyncio
 import grpc
+import time # <--- IMPORT THE TIME MODULE
 
 # Ensure transcribe_server.py is in the same directory or PYTHONPATH
 from transcribe_server import TranscriptionServer
@@ -50,29 +51,38 @@ class Listener(stt__pb2__grpc.ListenerServicer):
 
                 if response_proto: # response_proto is stt__pb2.TranscriptStreamResponse
                     if response_proto.results:
-                        # TTS logic (if needed here, or ensure TranscriptionServer populates synthesized_speech_audio)
                         for result_item in response_proto.results:
                             if result_item.is_final and result_item.alternatives:
                                 alt = result_item.alternatives[0]
-                                if alt.translation and not alt.synthesized_speech_audio: # Synthesize if not already done
+                                # Check if translation exists and if TTS has not already been done (e.g., by transcribe_server)
+                                if alt.translation and not alt.synthesized_speech_audio:
                                     logger.info(f"[Listener] Final translation for TTS: '{alt.translation}'")
+                                    
+                                    # --- Start TTS Timing ---
+                                    tts_start_time = time.perf_counter()
                                     tts_mp3_response = text2speech(alt.translation)
+                                    tts_end_time = time.perf_counter()
+                                    tts_duration_ms = (tts_end_time - tts_start_time) * 1000
+                                    # --- End TTS Timing ---
+                                    
                                     if tts_mp3_response and tts_mp3_response.audio_content:
-                                        logger.info(f"[Listener] TTS generated MP3 audio, length: {len(tts_mp3_response.audio_content)}")
+                                        logger.info(f"[Listener] TTS generated MP3 audio, length: {len(tts_mp3_response.audio_content)}, duration: {tts_duration_ms:.2f} ms")
                                         alt.synthesized_speech_audio = tts_mp3_response.audio_content
                                     else:
-                                        logger.warning(f"[Listener] TTS for '{alt.translation}' failed or produced no audio.")
+                                        logger.warning(f"[Listener] TTS for '{alt.translation}' failed or produced no audio. TTS attempt duration: {tts_duration_ms:.2f} ms")
+                                elif alt.translation and alt.synthesized_speech_audio:
+                                    logger.debug(f"[Listener] TTS audio already present for translation: '{alt.translation}'")
+                                elif not alt.translation:
+                                     logger.debug("[Listener] No translation available for TTS.")
+
                     yield response_proto
                 else:
-                    logger.warning("[Listener] recv_audio_bytes from TranscriptionServer returned None.")
+                    # Changed from warning to debug as it can be normal if no speech segment is finalized yet
+                    logger.debug("[Listener] recv_audio_bytes from TranscriptionServer returned None for this chunk.")
+                    pass # Continue to next audio chunk
         except Exception as e:
             logger.error(f"[Listener] Error during DoSpeechToText stream processing: {e}", exc_info=True)
-            # Optionally set gRPC context error
-            # context.set_code(grpc.StatusCode.INTERNAL)
-            # context.set_details(f"Error processing speech stream: {str(e)}")
-            # Or, if your proto defines an error message, yield that.
-            # For now, just logging and letting the stream end/error out.
-            raise # Re-raising helps see it on client if not handled by gRPC framework gracefully
+            raise 
 
 
 # serve function now accepts recognizer_id
@@ -97,36 +107,43 @@ async def serve(port, project, location, recognizer_id_arg: str):
 
 
 def text2speech(input_text: str): # TTS function, ensure it's robust
-    logger.debug(f"text2speech called for: '{input_text}'")
+    logger.debug(f"text2speech called for: '{input_text}' (length: {len(input_text)})")
+    if not input_text or not input_text.strip():
+        logger.warning("text2speech called with empty or whitespace-only input.")
+        return None
+        
     try:
+        # It's generally recommended to create clients once if possible,
+        # but creating per call is simpler if calls are infrequent.
+        # For high throughput, consider initializing client in Listener.__init__
+        # or making it global (with care for thread safety if not using gRPC stubs directly).
         client = texttospeech.TextToSpeechClient()
         synthesis_input = texttospeech.SynthesisInput(text=input_text)
+        # Consider making language_code for TTS configurable if translations are not always to English
         voice = texttospeech.VoiceSelectionParams(
-            language_code="en-US", # Or make this configurable if needed
-            ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL
+            language_code="en-US", 
+            ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL 
         )
         audio_config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3
         )
         response = client.synthesize_speech(
-            input=synthesis_input, voice=voice, audio_config=audio_config
+            request={"input": synthesis_input, "voice": voice, "audio_config": audio_config} # Using request dict
         )
         return response
     except Exception as e:
-        logger.error(f"Error in text2speech for input '{input_text}': {e}", exc_info=True)
+        logger.error(f"Error in text2speech for input '{input_text[:50]}...': {e}", exc_info=True) # Log only first 50 chars
         return None # Return None or an empty response object on error
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SpeechToText service')
     parser.add_argument('-p', action='store', dest='port', type=int, default=9080, help='Port to listen on.')
-    parser.add_argument('-project', action='store', dest='project', type=str, required=True, help='Google Cloud Project ID.') # Made project required
+    parser.add_argument('-project', action='store', dest='project', type=str, required=True, help='Google Cloud Project ID.')
     parser.add_argument('-location', action='store', dest='location', type=str, default='global', help='Google Cloud Location (e.g., us-central1, global for some services).')
-    # Added recognizer argument
     parser.add_argument('-recognizer', action='store', dest='recognizer_id', type=str, default='_',
                         help='Specific Recognizer ID to use (e.g., from Speech-to-Text v2). Use "_" or leave empty for default model behavior.')
     args = parser.parse_args()
 
     logger.info(f"Attempting to start STT server with: port={args.port}, project='{args.project}', location='{args.location}', recognizer_id='{args.recognizer_id}'")
-    # Pass args.recognizer_id to the serve function
     asyncio.run(serve(args.port, args.project, args.location, args.recognizer_id))

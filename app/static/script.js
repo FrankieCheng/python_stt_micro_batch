@@ -12,7 +12,7 @@ let scriptProcessorNode;
 let audioPlayer = new Audio(); // For playing received MP3s
 
 const TARGET_SAMPLE_RATE = 16000; // Your gRPC server expects this (from SAMPLING_RATE = 16000)
-const BUFFER_SIZE = 4096; // A common buffer size for ScriptProcessorNode
+const BUFFER_SIZE = 16384; // A common buffer size for ScriptProcessorNode
 
 function logMessage(data) {
     const entry = document.createElement('div');
@@ -21,10 +21,11 @@ function logMessage(data) {
     let content = '';
     if (data.type === 'transcription') {
         const confidenceScore = data.confidence ? data.confidence.toFixed(2) : 'N/A';
-        content = `<span class="${data.is_final ? 'transcript' : 'transcript interim'}">Transcript: ${data.transcript} (Confidence: ${confidenceScore})</span>`;
+        content = `<span class="${data.is_final ? 'transcript' : 'transcript interim'}">Transcript: ${data.transcript} </span>`;
         if (data.translation) {
             content += `<br><span class="translation">Translation: ${data.translation}</span>`;
         }
+
     } else if (data.type === 'error') {
         content = `<span class="error">Error: ${data.message}</span>`;
     } else if (data.type === 'info') {

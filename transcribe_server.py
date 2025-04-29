@@ -119,7 +119,7 @@ class TranscriptionServer:
         # self.vad_model_temp = torch.jit.load('silero_vad/silero_vad.jit') # Removed as it seemed redundant
         self.all_chunks = torch.tensor([])
         # This threshold is for VADIterator. Ensure it aligns with SPEECH_THRESHOLD if they mean the same.
-        self.vad_speech_threshold_iterator = 0.7 # Renamed for clarity if it's different from SPEECH_THRESHOLD
+        self.vad_speech_threshold_iterator = 0.5 # Renamed for clarity if it's different from SPEECH_THRESHOLD
         self.min_silence_duration_ms = 100
         self.vad_iterator = VADIterator(model=self.vad_model, threshold=self.vad_speech_threshold_iterator,
                                         sampling_rate=self.SAMPLING_RATE,
@@ -129,7 +129,7 @@ class TranscriptionServer:
 
     async def recv_audio_bytes(self, new_chunk, language_code):
         try:
-            logger.info(f"recv_audio_bytes: Type={type(new_chunk)}, len={len(new_chunk)}, Lang={language_code}")
+            logger.info(f"Type={type(new_chunk)}, len={len(new_chunk)}, Lang={language_code}")
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
             # Fix for NumPy warning: use .copy() and torch.from_numpy or torch.tensor
             current_chunks_tensor = torch.from_numpy(audio_array.copy())
