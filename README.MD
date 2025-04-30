@@ -40,6 +40,11 @@ python3 test_client_microphone.py -p 9080 -l zh-Hans-CN -project {PROJECT_ID} -l
 python3 gradio-test.py -l zh-Hans-CN -project {PROJECT_ID} -location {location}
 ```
 
+## Website
+```
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
 ## Development
 Users need to access to specific services, you can refer to the code:test_client_microphone.py.
 The server use 'Gemini' as transcript engine, and you can switch the engine to 'Chirp_2', change 'transcribe_by_gemini' to 'transcribe' in ['transcribe_server.py'](transcribe_server.py) line 203.
