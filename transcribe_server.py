@@ -235,7 +235,7 @@ class TranscriptionServer:
             logger.debug("No new speech segments detected by VAD.")
             return None
         filename = os.path.join(debug_audio_dir, f"to_website_{timestamp_str}_s{current_start_index}_e{current_end_index}.wav")
-        self.save_tensor_to_wav(self.all_chunks, 16000, filename") # Debug line
+        self.save_tensor_to_wav(self.all_chunks, 16000, filename) # Debug line
 
         valid_segments_for_transcription = []
         temp_start_for_filtering = 0 # Used to ensure segments are contiguous or properly started
