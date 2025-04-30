@@ -14,7 +14,7 @@ let audioPlayer = new Audio(); // For playing received MP3s
 const TARGET_SAMPLE_RATE = 16000;
 // const BUFFER_SIZE = 4096; // For ~256ms chunks from client
 // const BUFFER_SIZE = 8192;   // For ~512ms chunks from client (as per recent discussion)
-const BUFFER_SIZE = 16384; // Current in your file: for ~1024ms chunks from client
+const BUFFER_SIZE = 32768; // Current in your file: for ~1024ms chunks from client
 
 let lastSendTime = 0; // To track send time for RTT (approximate)
 

@@ -84,7 +84,7 @@ def perform_google_cloud_connectivity_tests(project_id, location):
 class TranscriptionServer:
     SAMPLING_RATE = 16000
     WINDOW_SIZE_SAMPLES = 1024
-    SPEECH_THRESHOLD = 0.3 # VAD threshold used in process_new_chunks direct check
+    SPEECH_THRESHOLD = 0.33 # VAD threshold used in process_new_chunks direct check
 
     def __init__(self, project_id, location, recognizer_id_str):
         logger.info(f"Initializing TranscriptionServer with project='{project_id}', location='{location}', recognizer_id='{recognizer_id_str}'")
@@ -253,7 +253,7 @@ class TranscriptionServer:
                     temp_start_for_filtering = seg['end']
             elif 'immediate' in seg and is_last_segment:
                 seg_start = seg.get('start', temp_start_for_filtering)
-                if seg_start < seg['immediate'] and (seg['immediate'] - seg_start > self.SAMPLING_RATE * 0.2): # Min length check
+                if seg_start < seg['immediate'] and (seg['immediate'] - seg_start > self.SAMPLING_RATE * 0.4): # Min length check
                     valid_segments_for_transcription.append({'start': seg_start, 'immediate': seg['immediate']})
         
         logger.info(f"Filtered valid_segments_for_transcription: {valid_segments_for_transcription}")
