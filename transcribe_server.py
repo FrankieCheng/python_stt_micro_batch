@@ -239,7 +239,7 @@ class TranscriptionServer:
         if not os.path.exists(debug_audio_dir):
             os.makedirs(debug_audio_dir)
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = os.path.join(debug_audio_dir, f"to_website_{timestamp_str}_s{current_start_index}_e{current_end_index}.wav")
+        filename = os.path.join(debug_audio_dir, f"to_website_{timestamp_str}.wav")
         self.save_tensor_to_wav(self.all_chunks, 16000, filename) # Debug line
 
         valid_segments_for_transcription = []
