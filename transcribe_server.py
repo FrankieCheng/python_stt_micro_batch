@@ -28,7 +28,8 @@ from vad import VADIterator # Assuming these are your local VAD utilities
 from prompts import prompt_template_ast, prompt_template_asr
 
 # Global model name from your code
-asr_model_name_gemini = "gemini-1.5-flash-002" # Renamed for clarity
+# asr_model_name_gemini = "gemini-1.5-flash-002" # Renamed for clarity
+asr_model_name_gemini = "gemini-2.0-flash-lite-001"
 TARGET_LANGUAGE = 'English' # You can make this configurable
 
 FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
