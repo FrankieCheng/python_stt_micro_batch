@@ -136,7 +136,11 @@ class TranscriptionServer:
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
             # Fix for NumPy warning: use .copy() and torch.from_numpy or torch.tensor
             current_chunks_tensor = torch.from_numpy(audio_array.copy())
-
+            if current_chunks_tensor.numel() > 0: # Ensure tensor is not empty
+                max_val = torch.abs(current_chunks_tensor).max()
+                if max_val > 0: # Avoid division by zero for silent chunks
+                    current_chunks_tensor = current_chunks_tensor / max_val
+                    logger.debug(f"Normalized incoming browser audio chunk. Original max_val: {max_val:.4f}")
             result = await self.process_new_chunks(current_chunks_tensor, language_code)
             return result
         except Exception as e:

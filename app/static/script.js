@@ -112,6 +112,8 @@ startRecBtn.onclick = async () => {
         
         if (audioContext.sampleRate !== TARGET_SAMPLE_RATE) {
             console.warn(`AudioContext running at ${audioContext.sampleRate}Hz, not target ${TARGET_SAMPLE_RATE}Hz. Input will be at ${audioContext.sampleRate}Hz from ScriptProcessorNode.`);
+        } else {
+            console.log(`AudioContext successfully started at TARGET_SAMPLE_RATE: ${audioContext.sampleRate}Hz.`);
         }
 
         const source = audioContext.createMediaStreamSource(mediaStream);
@@ -123,6 +125,11 @@ startRecBtn.onclick = async () => {
 
         scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
             if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
+            
+            if (!window.loggedInputBufferSampleRate) { // Log only once
+                console.log("ScriptProcessorNode InputBuffer sample rate:", audioProcessingEvent.inputBuffer.sampleRate);
+                window.loggedInputBufferSampleRate = true; 
+            }
 
             const inputBuffer = audioProcessingEvent.inputBuffer;
             // Get data for the first channel
