@@ -329,6 +329,9 @@ class TranscriptionServer:
                 logger.info(f"Processing segment for AST: start={current_start_index}, end={current_end_index}")
 
                 if target_gemini_language != TARGET_LANGUAGE:
+                    transcript_text, stt_duration = await self.transcribe_by_gemini(transcripted_base64_content, target_gemini_language)
+                    segment_to_process['transcript'] = transcript_text
+                    segment_to_process['stt_duration'] = stt_duration
                     translation_text, translation_duration = await self.transcribe_and_translate_by_gemini(
                         transcripted_base64_content,
                         target_gemini_language,

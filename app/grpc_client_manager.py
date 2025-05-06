@@ -10,7 +10,7 @@ import stt_pb2_grpc as stt__pb2__grpc
 
 logger = logging.getLogger(__name__)
 
-GRPC_SERVER_ADDRESS = "localhost:53926"  # Or your gRPC server address
+GRPC_SERVER_ADDRESS = "localhost:53925"  # Or your gRPC server address
 _TIMEOUT_SECONDS_STREAM = 1000 # As per your original client
 
 async def generate_stt_requests_from_web_audio(audio_chunk_iterator, language_code: str):
