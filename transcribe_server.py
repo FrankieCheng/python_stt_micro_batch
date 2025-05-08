@@ -13,21 +13,24 @@ import os
 
 from google.api_core.client_options import ClientOptions
 from google.cloud.speech_v2 import SpeechClient
-from google.cloud.speech_v2.types import cloud_speech
+from google.cloud.speech_v2.types import cloud_speech # RecognitionConfig, StreamingRecognitionConfig etc. are here
 from google.auth.exceptions import DefaultCredentialsError
+
 
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
-import vertexai.generative_models as generative_models
+import vertexai.generative_models as generative_models # Added for HarmCategory and HarmBlockThreshold
 
-import stt_pb2 as stt__pb2
-from vad import VADIterator
-# from utils_vad import get_speech_timestamps
+import stt_pb2 as stt__pb2 # Your protobuf definitions
+from vad import VADIterator # Assuming these are your local VAD utilities
+# from utils_vad import get_speech_timestamps # This was commented out in your provided code
 
 from prompts import prompt_template_ast, prompt_template_asr
 
+# Global model name from your code
+# asr_model_name_gemini = "gemini-1.5-flash-002" # Renamed for clarity
 asr_model_name_gemini = "gemini-2.0-flash-lite-001"
-TARGET_LANGUAGE = 'English'
+TARGET_LANGUAGE = 'English' # You can make this configurable
 
 FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT, datefmt='%Y-%m-%d %H:%M:%S')
@@ -40,11 +43,13 @@ LANGUAGE_CODE_DIC = {
     'es-ES':'Spanish'
 }
 
+# --- It's good practice to put the connectivity test outside the class or as a static method ---
 def perform_google_cloud_connectivity_tests(project_id, location):
-    # ... (implementation as you provided) ...
     logger.info("[ConnectivityTest] Starting Google Cloud connectivity tests...")
     speech_v2_ok = False
     vertex_ai_ok = False
+
+    # Test Speech-to-Text v2 Client
     try:
         endpoint = f"{location}-speech.googleapis.com"
         logger.info(f"[ConnectivityTest] Attempting to create SpeechClient (v2) with endpoint: {endpoint}...")
@@ -56,6 +61,8 @@ def perform_google_cloud_connectivity_tests(project_id, location):
         logger.error(f"[ConnectivityTest] FAILED SpeechClient (v2) creation due to DefaultCredentialsError: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"[ConnectivityTest] FAILED SpeechClient (v2) creation for test: {e}", exc_info=True)
+
+    # Test Vertex AI Client
     try:
         logger.info(f"[ConnectivityTest] Attempting to initialize Vertex AI for project: {project_id}, location: {location}...")
         vertexai.init(project=project_id, location=location)
@@ -67,26 +74,31 @@ def perform_google_cloud_connectivity_tests(project_id, location):
         logger.error(f"[ConnectivityTest] FAILED Vertex AI init or Gemini model instantiation due to DefaultCredentialsError: {e}", exc_info=True)
     except Exception as e:
         logger.error(f"[ConnectivityTest] FAILED Vertex AI init or Gemini model instantiation for test: {e}", exc_info=True)
+
     if not (speech_v2_ok and vertex_ai_ok):
         logger.critical("[ConnectivityTest] One or more Google Cloud connectivity tests FAILED. Check logs above.")
         return False
     logger.info("[ConnectivityTest] All Google Cloud connectivity tests PASSED.")
     return True
 
+
 class TranscriptionServer:
     SAMPLING_RATE = 16000
-    WINDOW_SIZE_SAMPLES = 1024 # Your current setting (64ms)
-    SPEECH_THRESHOLD = 0.33    # Your current setting
+    WINDOW_SIZE_SAMPLES = 1024
+    SPEECH_THRESHOLD = 0.33 # VAD threshold used in process_new_chunks direct check
 
     def __init__(self, project_id, location, recognizer_id_str):
-        # ... (implementation as you provided, including client initializations) ...
         logger.info(f"Initializing TranscriptionServer with project='{project_id}', location='{location}', recognizer_id='{recognizer_id_str}'")
         torch.set_num_threads(1)
+
         self.PROJECT_ID = project_id
         self.LOCATION = location
         self.recognizer_id_str = recognizer_id_str
+
         if not perform_google_cloud_connectivity_tests(self.PROJECT_ID, self.LOCATION):
             logger.error("Critical connectivity tests failed. TranscriptionServer may not function correctly.")
+            # Consider: raise RuntimeError("Failed to establish initial connectivity to Google Cloud services.")
+
         self.speech_v2_client = None
         self.gemini_model_instance = None
         try:
@@ -96,6 +108,7 @@ class TranscriptionServer:
             logger.info("Persistent SpeechClient (v2) created.")
         except Exception as e:
             logger.error(f"Failed to create persistent SpeechClient (v2): {e}", exc_info=True)
+
         try:
             logger.info(f"Initializing persistent Vertex AI for project: {self.PROJECT_ID}, location: {self.LOCATION}")
             vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
@@ -105,26 +118,28 @@ class TranscriptionServer:
             logger.info("Persistent Gemini Model instance created.")
         except Exception as e:
             logger.error(f"Failed to initialize persistent Vertex AI or Gemini Model: {e}", exc_info=True)
-        self.vad_model = torch.jit.load('silero_vad/silero_vad.jit')
+
+        self.vad_model = torch.jit.load('silero_vad/silero_vad.jit') # Main VAD model
+        # self.vad_model_temp = torch.jit.load('silero_vad/silero_vad.jit') # Removed as it seemed redundant
         self.all_chunks = torch.tensor([])
-        self.vad_speech_threshold_iterator = 0.5
-        self.min_silence_duration_ms = 400 # Your current setting
+        # This threshold is for VADIterator. Ensure it aligns with SPEECH_THRESHOLD if they mean the same.
+        self.vad_speech_threshold_iterator = 0.5 # Renamed for clarity if it's different from SPEECH_THRESHOLD
+        self.min_silence_duration_ms = 400
         self.vad_iterator = VADIterator(model=self.vad_model, threshold=self.vad_speech_threshold_iterator,
                                         sampling_rate=self.SAMPLING_RATE,
                                         min_silence_duration_ms=self.min_silence_duration_ms)
-        self.last_end = 0
-        self.last_start = -1
-
+        self.last_end = 0 # Tracks end of last processed VAD segment across calls to process_new_chunks
+        self.last_start = -1 # Tracks start of current VAD segment across calls to process_new_chunks
 
     async def recv_audio_bytes(self, new_chunk, language_code):
-        # ... (implementation as you provided) ...
         try:
             logger.info(f"Type={type(new_chunk)}, len={len(new_chunk)}, Lang={language_code}")
             audio_array = np.frombuffer(new_chunk, dtype=np.float32)
+            # Fix for NumPy warning: use .copy() and torch.from_numpy or torch.tensor
             current_chunks_tensor = torch.from_numpy(audio_array.copy())
-            if current_chunks_tensor.numel() > 0: 
+            if current_chunks_tensor.numel() > 0: # Ensure tensor is not empty
                 max_val = torch.abs(current_chunks_tensor).max()
-                if max_val > 0: 
+                if max_val > 0: # Avoid division by zero for silent chunks
                     current_chunks_tensor = current_chunks_tensor / max_val
                     logger.debug(f"Normalized incoming browser audio chunk. Original max_val: {max_val:.4f}")
             result = await self.process_new_chunks(current_chunks_tensor, language_code)
@@ -134,25 +149,29 @@ class TranscriptionServer:
             return None
 
     def recv_audio_output(self, current_transcript_segments):
-        # ... (implementation as you provided, ensuring it uses stt_duration_ms and translation_duration_ms) ...
         if current_transcript_segments and len(current_transcript_segments) > 0:
             transcript_stream_results_list = []
             first_start_offset = current_transcript_segments[0].get('start', 0)
+
             for segment in current_transcript_segments:
                 result_end_offset_val = segment.get('end', segment.get('immediate', 0))
                 is_final_val = 'end' in segment
                 transcript_val = segment.get('transcript', "")
                 translation_val = segment.get('translation', "")
-                confidence_val = segment.get('confidence', 0.2) 
-                stt_duration_val = segment.get('stt_duration', 0) 
-                translation_duration_val = segment.get('translation_duration', 0)
+                confidence_val = segment.get('confidence', 0.2) # Default if not set
+                
+                stt_duration_val = segment.get('stt_duration', 0) # Get STT duration
+                translation_duration_val = segment.get('translation_duration', 0) # Get translation duration
+
                 alternatives_list = [stt__pb2.Alternative(
                     transcript=transcript_val,
                     translation=translation_val,
                     confidence=confidence_val,
-                    stt_duration_ms=stt_duration_val,
-                    translation_duration_ms=translation_duration_val
+                    stt_duration_ms=stt_duration_val,                 # SET PROTO FIELD
+                    translation_duration_ms=translation_duration_val  # SET PROTO FIELD
+                    # tts_duration_ms will be set by stt_server.py
                 )]
+                
                 transcript_stream_results_list.append(stt__pb2.TranscriptStreamResult(
                     result_end_offset=int(result_end_offset_val),
                     is_final=is_final_val,
@@ -165,8 +184,6 @@ class TranscriptionServer:
         else:
             logger.debug("recv_audio_output called with no segments.")
             return None
-
-    # +++ NEW HELPER METHOD for concurrent processing of one segment +++
     async def _process_single_segment_concurrently(self, segment_dict, audio_b64_content, language_code_for_stt, target_gemini_language_for_ast):
         """
         Processes a single audio segment for STT and (conditionally) Translation.
@@ -214,7 +231,8 @@ class TranscriptionServer:
         
         return segment_dict # Return the modified dictionary
 
-
+    
+    
     async def process_new_chunks(self, current_chunks, language_code):
         # --- Start of your existing VAD and segment identification logic ---
         # (This part remains largely the same as your provided version until
@@ -364,26 +382,25 @@ class TranscriptionServer:
             
         return self.recv_audio_output(output_segments_with_results)
 
-    # ... (tensor_to_base64, transcribe, call_gemini, transcribe_by_gemini, transcribe_and_translate_by_gemini methods remain as you provided,
-    #      ensure `transcribe_by_gemini` and `transcribe_and_translate_by_gemini` return (text, duration_ms) tuples.
-    #      Your provided code for these already does that, so that's good.)
 
-    # ... (process_ununsed, cleanup, save_tensor_to_wav, find_first_no_transcript_segment methods as you provided) ...
-    # Make sure the transcribe (Chirp) method also returns (text, duration_ms) if it's ever used.
+
+    def tensor_to_base64(self, tensor, sample_rate):
+        audio_buffer = io.BytesIO()
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        # Ensure tensor is on CPU and float32 for torchaudio.save
+        tensor_for_save = tensor.cpu().float()
+        torchaudio.save(audio_buffer, tensor_for_save, sample_rate, format="wav", bits_per_sample=16)
+        audio_bytes = audio_buffer.getvalue()
+        base64_bytes = base64.b64encode(audio_bytes)
+        base64_string = base64_bytes.decode("utf-8")
+        return base64_string
+
     async def transcribe(self, base64_data_wav, language_code: str):
         if not self.speech_v2_client:
             logger.error("Chirp STT: SpeechClient (v2) not initialized. Cannot transcribe.")
-            return "", 0 # Return text and duration
-        # ... (rest of your transcribe method, ensure it calculates and returns duration_ms)
-        # Example from your code (needs start_time_ms, end_time_ms defined correctly)
+            return ""
         start_time_ms = int(datetime.now().timestamp() * 1000)
-        # ... your existing Chirp client.recognize call ...
-        # response = await loop.run_in_executor(...)
-        end_time_ms = int(datetime.now().timestamp() * 1000)
-        duration_ms = end_time_ms - start_time_ms
-        # ... (process response to get transcript_text) ...
-        # return self.process_ununsed(transcript_text), duration_ms
-        # Using the full implementation from your provided code:
         logger.info(f"Chirp STT: Transcribing for lang '{language_code}'. Data length (b64): {len(base64_data_wav)}")
         recognition_config = cloud_speech.RecognitionConfig(
             explicit_decoding_config=cloud_speech.ExplicitDecodingConfig(
@@ -402,13 +419,11 @@ class TranscriptionServer:
             logger.info("Chirp STT: Using general model 'chirp' without a specific recognizer resource.")
         request = cloud_speech.RecognizeRequest(**request_params)
         transcript_text = ""
-        actual_duration_ms = 0
         try:
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, functools.partial(self.speech_v2_client.recognize, request=request))
-            end_time_ms_call = int(datetime.now().timestamp() * 1000)
-            actual_duration_ms = end_time_ms_call - start_time_ms # Renamed to avoid conflict if already defined
-            logger.info(f"Chirp STT: Response received in {actual_duration_ms} ms.")
+            end_time_ms = int(datetime.now().timestamp() * 1000)
+            logger.info(f"Chirp STT: Response received in {end_time_ms - start_time_ms} ms.")
             if response.results and response.results[0].alternatives:
                 transcript_text = response.results[0].alternatives[0].transcript
                 billed_duration_s = response.metadata.total_billed_duration.seconds if response.metadata and response.metadata.total_billed_duration else "N/A"
@@ -420,11 +435,9 @@ class TranscriptionServer:
             logger.error(f"Chirp STT: gRPC error during recognize call: Code={e.code()} Details='{e.details()}'", exc_info=True)
         except Exception as e:
             logger.error(f"Chirp STT: Generic error during recognize call: {e}", exc_info=True)
-        return transcript_text, actual_duration_ms
-
+        return transcript_text
 
     async def call_gemini(self, prompt_contents, generation_config, safety_settings, model_instance):
-        # ... (implementation as you provided) ...
         if not model_instance:
              logger.error("Gemini Call: Model instance is None. Cannot proceed.")
              return None
@@ -436,81 +449,83 @@ class TranscriptionServer:
                     generation_config=generation_config, safety_settings=safety_settings, stream=False
                 )
             )
+            
             return response
         except Exception as e:
             logger.error(f"Gemini Call: Error during generate_content: {e}", exc_info=True)
             return None
 
     async def transcribe_by_gemini(self, audio_base64_wav, language_name):
-        # ... (implementation as you provided, ensure it returns (text, duration_ms)) ...
         if not self.gemini_model_instance:
             logger.error("Gemini ASR: Gemini model not initialized. Cannot transcribe.")
-            return "", 0 
+            return "", 0 # Return text and duration
+        
         logger.info(f"Gemini ASR: Transcribing for lang '{language_name}'. Data length (b64): {len(audio_base64_wav)}")
-        start_time_ms = int(datetime.now().timestamp() * 1000)
+        start_time_ms = int(datetime.now().timestamp() * 1000) # Corrected to use ms consistently
+
+        # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
+        
         prompt = prompt_template_asr.format(language=language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
+        
         transcript = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
-        # Check if response is None (from error in call_gemini)
-        if response is None:
-            logger.warning("Gemini ASR: call_gemini returned None, possibly due to an error.")
-        elif hasattr(response, 'text'):
-            logger.info(f"Gemini Call transcribe: Response received: {response.text[:200]}...") # Log snippet
+        logger.info(f"Gemini Call transcribe: Response received: {response.text}")
+
+        if response and hasattr(response, 'text'):
             try:
                 response_results = json.loads(response.text)
                 transcript = response_results.get('Fluent_Transcription', "")
+            # ... (error handling as before) ...
             except json.JSONDecodeError:
                 logger.error(f"Gemini ASR: Failed to parse JSON from response: {response.text}")
             except Exception as e:
                 logger.error(f"Gemini ASR: Error processing Gemini response: {e}", exc_info=True)
         else:
-            logger.warning(f"Gemini ASR: No valid 'text' attribute in response received from Gemini model. Response: {type(response)}")
+            logger.warning("Gemini ASR: No valid response received from Gemini model.")
+
         end_time_ms = int(datetime.now().timestamp() * 1000)
-        duration_ms = end_time_ms - start_time_ms
+        duration_ms = end_time_ms - start_time_ms # This is the duration
         logger.info(f"Gemini ASR: Transcript='{transcript}', Duration={duration_ms}ms")
-        return self.process_ununsed(transcript), duration_ms
+        return self.process_ununsed(transcript), duration_ms # RETURN TUPLE
 
     async def transcribe_and_translate_by_gemini(self, audio_base64_wav, source_language_name, target_language_name):
-        # ... (implementation as you provided, ensure it returns (text, duration_ms)) ...
         if not self.gemini_model_instance:
             logger.error("Gemini AST: Gemini model not initialized. Cannot process.")
-            return "", 0
+            return "", 0 # Return text and duration
+
         logger.info(f"Gemini AST: Translating from '{source_language_name}' to '{target_language_name}'. Data length (b64): {len(audio_base64_wav)}")
         start_time_ms = int(datetime.now().timestamp() * 1000)
+
+        # ... (generation_config, safety_settings, prompt_contents setup as before) ...
         generation_config = {"max_output_tokens": 512, "temperature": 0.1, "top_p": 0.95, "response_mime_type": "application/json"}
         safety_settings = {category: generative_models.HarmBlockThreshold.BLOCK_NONE for category in generative_models.HarmCategory}
+        
         prompt = prompt_template_ast.format(source_language=source_language_name, target_language=target_language_name)
         prompt_contents = [prompt, Part.from_data(mime_type="audio/wav", data=base64.b64decode(audio_base64_wav))]
+            
         translation = ""
         response = await self.call_gemini(prompt_contents, generation_config, safety_settings, self.gemini_model_instance)
-        if response is None:
-             logger.warning("Gemini AST: call_gemini returned None, possibly due to an error.")
-        elif hasattr(response, 'text'):
-            logger.info(f"Gemini Call translate: Response received: {response.text[:200]}...") # Log snippet
+        logger.info(f"Gemini Call transcribe and translate: Response received: {response.text}")
+
+        if response and hasattr(response, 'text'):
             try:
                 response_results = json.loads(response.text)
                 translation = response_results.get('Translation', "")
+            # ... (error handling as before) ...
             except json.JSONDecodeError:
                 logger.error(f"Gemini AST: Failed to parse JSON from response: {response.text}")
             except Exception as e:
                 logger.error(f"Gemini AST: Error processing Gemini response: {e}", exc_info=True)
         else:
-            logger.warning(f"Gemini AST: No valid 'text' attribute in response received from Gemini model. Response: {type(response)}")
+            logger.warning("Gemini AST: No valid response received from Gemini model.")
+                
         end_time_ms = int(datetime.now().timestamp() * 1000)
-        duration_ms = end_time_ms - start_time_ms
+        duration_ms = end_time_ms - start_time_ms # This is the duration
         logger.info(f"Gemini AST: Translation='{translation}', Duration={duration_ms}ms")
-        return self.process_ununsed(translation), duration_ms
-
-    # ... (process_ununsed, cleanup, save_tensor_to_wav, find_first_no_transcript_segment as you provided)
-    # Ensure find_first_no_transcript_segment removes the stray "StreamingRecognizeResponse" line
-    def find_first_no_transcript_segment(self, segments):
-        for segment in segments:
-            if not 'transcript' in segment:
-                return segment
-        return None
+        return self.process_ununsed(translation), duration_ms # RETURN TUPLE
 
     def process_ununsed(self, txt):
         if not isinstance(txt, str):
@@ -521,21 +536,24 @@ class TranscriptionServer:
         return txt.lower().replace("null", "").strip()
     
     def cleanup(self):
+        # Reset state for a new independent stream if the instance is reused.
         logger.info("Cleaning up TranscriptionServer state for a new stream.")
         self.all_chunks = torch.tensor([])
         self.last_end = 0
         self.last_start = -1
-        if hasattr(self.vad_iterator, 'reset_states') and callable(self.vad_iterator.reset_states):
-            self.vad_iterator.reset_states()
+        self.vad_iterator.reset_states() # If your VADIterator has resettable internal states
 
     def save_tensor_to_wav(self, tensor, sample_rate, output_file):
-        try:
-            if tensor.numel() == 0:
-                logger.warning(f"Attempted to save empty tensor to {output_file}. Skipping.")
-                return
-            if tensor.ndim == 1:
-                tensor = tensor.unsqueeze(0)
-            tensor_for_save = tensor.cpu().float()
-            torchaudio.save(output_file, tensor_for_save, sample_rate, format="wav", bits_per_sample=16)
-        except Exception as e:
-            logger.error(f"Error saving tensor to WAV {output_file}: {e}", exc_info=True)
+        if tensor.ndim == 1:
+            tensor = tensor.unsqueeze(0)
+        # Ensure tensor is on CPU and float32 for torchaudio.save
+        tensor_for_save = tensor.cpu().float()
+        torchaudio.save(output_file, tensor_for_save, sample_rate, bits_per_sample=16)
+
+    def find_first_no_transcript_segment(self, segments):
+        # This function might not be needed with the revised loop in process_new_chunks
+        # StreamingRecognizeResponse # Stray comment, removed
+        for segment in segments:
+            if not 'transcript' in segment:
+                return segment
+        return None
