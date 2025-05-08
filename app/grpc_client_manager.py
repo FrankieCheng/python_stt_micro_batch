@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Your stt_server.py usually runs on port 9080.
 # The log you showed previously had "localhost:53925" here which was strange.
 # Defaulting to 9080 based on typical stt_server.py setup.
-GRPC_SERVER_ADDRESS = "localhost:9080"
+GRPC_SERVER_ADDRESS = "localhost:53925"
 _TIMEOUT_SECONDS_STREAM = 1000 # As per your original client
 
 # MODIFIED: Added enable_tts parameter

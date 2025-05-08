@@ -5,9 +5,6 @@ const languageSelect = document.getElementById('languageSelect');
 const statusDiv = document.getElementById('status');
 const outputLog = document.getElementById('outputLog');
 const toggleTtsBtn = document.getElementById('toggleTtsBtn'); // Get the new button
-const enableTtsParam = ttsPlaybackEnabled ? 'true' : 'false';
-const wsUrl = `<span class="math-inline">\{wsProtocol\}//</span>{window.location.host}/ws/stt?language=<span class="math-inline">\{selectedLanguage\}&enable\_tts\=</span>{enableTtsParam}`;
-websocket = new WebSocket(wsUrl);
 
 let websocket;
 let audioContext;
@@ -15,15 +12,14 @@ let mediaStream;
 let scriptProcessorNode;
 let audioPlayer = new Audio(); // For playing received MP3s
 
-
 // --- STATE VARIABLE FOR TTS PLAYBACK ---
 let ttsPlaybackEnabled = true; // Default to enabled
 
 const TARGET_SAMPLE_RATE = 16000;
 // Choose your desired client-side buffer size:
 // const BUFFER_SIZE = 4096; // For ~256ms chunks from client
-const BUFFER_SIZE = 8192;   // For ~512ms chunks from client
-// const BUFFER_SIZE = 16384; // For ~1024ms chunks from client (was in your last version)
+// const BUFFER_SIZE = 8192;   // For ~512ms chunks from client
+const BUFFER_SIZE = 16384; // For ~1024ms chunks from client (was in your last version)
 
 // --- Initialize TTS Button State and Visuals ---
 function updateTtsButtonVisuals() {
