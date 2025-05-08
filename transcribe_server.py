@@ -24,6 +24,8 @@ import stt_pb2 as stt__pb2
 from vad import VADIterator
 from prompts import prompt_template_ast, prompt_template_asr
 
+DEBUG_AUDIO_SAVE = 0
+
 asr_model_name_gemini = "gemini-1.5-flash-002" 
 TARGET_LANGUAGE = 'English'
 
@@ -208,12 +210,15 @@ class TranscriptionServer:
         
         # Debug save for audio sent to Gemini
         try:
-            debug_audio_dir_gemini = "debug_audio_clips_gemini"
-            if not os.path.exists(debug_audio_dir_gemini): os.makedirs(debug_audio_dir_gemini)
-            timestamp_str_gemini = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            filename_gemini = os.path.join(debug_audio_dir_gemini, f"to_gemini_{timestamp_str_gemini}_s{current_start_index}_e{current_end_index}.wav")
-            self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename_gemini)
-            logger.info(f"Saved debug audio segment for API to: {filename_gemini}")
+            if DEBUG_AUDIO_SAVE:
+                debug_audio_dir_gemini = "debug_audio_clips_gemini"
+                if not os.path.exists(debug_audio_dir_gemini): os.makedirs(debug_audio_dir_gemini)
+                timestamp_str_gemini = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                filename_gemini = os.path.join(debug_audio_dir_gemini, f"to_gemini_{timestamp_str_gemini}_s{current_start_index}_e{current_end_index}.wav")
+                self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename_gemini)
+                logger.debug(f"Saved debug audio segment for API to: {filename_gemini}")
+            else:
+                logger.debug("Not saving debug audio segment for API.")
         except Exception as save_e:
             logger.error(f"Failed to save debug audio segment for API: {save_e}", exc_info=True)
         
@@ -613,12 +618,15 @@ class TranscriptionServer:
 
             # Debug save for audio sent to Gemini
             try:
-                debug_audio_dir_gemini = "debug_audio_clips_gemini" # Separate dir for clarity
-                if not os.path.exists(debug_audio_dir_gemini): os.makedirs(debug_audio_dir_gemini)
-                timestamp_str_gemini = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                filename_gemini = os.path.join(debug_audio_dir_gemini, f"to_gemini_{timestamp_str_gemini}_s{current_start_index}_e{current_end_index}.wav")
-                self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename_gemini)
-                logger.info(f"Saved debug audio segment for Gemini to: {filename_gemini}")
+                if DEBUG_AUDIO_SAVE:
+                    debug_audio_dir_gemini = "debug_audio_clips_gemini" # Separate dir for clarity
+                    if not os.path.exists(debug_audio_dir_gemini): os.makedirs(debug_audio_dir_gemini)
+                    timestamp_str_gemini = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    filename_gemini = os.path.join(debug_audio_dir_gemini, f"to_gemini_{timestamp_str_gemini}_s{current_start_index}_e{current_end_index}.wav")
+                    self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename_gemini)
+                    logger.debug(f"Saved debug audio segment for Gemini to: {filename_gemini}")
+                else:
+                    logger.info("Not saving debug audio for Gemini.")
             except Exception as save_e:
                 logger.error(f"Failed to save debug audio segment for Gemini: {save_e}", exc_info=True)
 
