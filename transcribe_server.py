@@ -1,80 +1,5 @@
 import logging
 import asyncio
-import functools # For functools.partial
-import io
-import base64
-import torch
-import torchaudio
-import numpy as np
-import json
-from datetime import datetime
-import grpc # Added for grpc.RpcError
-import os
-
-from google.api_core.client_options import ClientOptions
-from google.cloud.speech_v2 import SpeechClient
-from google.cloud.speech_v2.types import cloud_speech
-from google.auth.exceptions import DefaultCredentialsError
-
-import vertexai
-from vertexai.generative_models import GenerativeModel, Part
-import vertexai.generative_models as generative_models
-
-import stt_pb2 as stt__pb2
-from vad import VADIterator
-# from utils_vad import get_speech_timestamps
-
-from prompts import prompt_template_ast, prompt_template_asr
-
-asr_model_name_gemini = "gemini-1.5-flash-002" # Changed back from 2.0-flash-lite-001 as per your current file top
-TARGET_LANGUAGE = 'English'
-
-FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
-logging.basicConfig(level=logging.INFO, format=FORMAT, datefmt='%Y-%m-%d %H:%M:%S')
-logger = logging.getLogger('TranscriptionServer')
-
-LANGUAGE_CODE_DIC = {
-    'ar-EG':'Arabic', 'zh-Hans-CN':'Chinese', 'cmn-Hant-TW':'Traditional Chinese',
-    'nl-NL':'Dutch', 'en-US':'English', 'fr-FR':'French', 'de-DE':'German',
-    'hi-IN':'Hindi', 'it-IT':'Italian', 'ja-JP':'Japanese', 'pt-PT':'Portuguese',
-    'es-ES':'Spanish'
-}
-
-def perform_google_cloud_connectivity_tests(project_id, location):
-    # ... (implementation as you provided - this is good) ...
-    logger.info("[ConnectivityTest] Starting Google Cloud connectivity tests...")
-    speech_v2_ok = False
-    vertex_ai_ok = False
-    try:
-        endpoint = f"{location}-speech.googleapis.com"
-        logger.info(f"[ConnectivityTest] Attempting to create SpeechClient (v2) with endpoint: {endpoint}...")
-        speech_v2_test_client = SpeechClient(client_options=ClientOptions(api_endpoint=endpoint))
-        logger.info("[ConnectivityTest] SpeechClient (v2) created successfully for test.")
-        del speech_v2_test_client
-        speech_v2_ok = True
-    except DefaultCredentialsError as e:
-        logger.error(f"[ConnectivityTest] FAILED SpeechClient (v2) creation due to DefaultCredentialsError: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"[ConnectivityTest] FAILED SpeechClient (v2) creation for test: {e}", exc_info=True)
-    try:
-        logger.info(f"[ConnectivityTest] Attempting to initialize Vertex AI for project: {project_id}, location: {location}...")
-        vertexai.init(project=project_id, location=location)
-        logger.info("[ConnectivityTest] Vertex AI initialized successfully for test.")
-        _ = GenerativeModel(asr_model_name_gemini)
-        logger.info(f"[ConnectivityTest] Gemini model {asr_model_name_gemini} instantiated successfully for test.")
-        vertex_ai_ok = True
-    except DefaultCredentialsError as e:
-        logger.error(f"[ConnectivityTest] FAILED Vertex AI init or Gemini model instantiation due to DefaultCredentialsError: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"[ConnectivityTest] FAILED Vertex AI init or Gemini model instantiation for test: {e}", exc_info=True)
-    if not (speech_v2_ok and vertex_ai_ok):
-        logger.critical("[ConnectivityTest] One or more Google Cloud connectivity tests FAILED. Check logs above.")
-        return False
-    logger.info("[ConnectivityTest] All Google Cloud connectivity tests PASSED.")
-    return True
-
-import logging
-import asyncio
 import functools 
 import io
 import base64
@@ -99,7 +24,7 @@ import stt_pb2 as stt__pb2
 from vad import VADIterator
 from prompts import prompt_template_ast, prompt_template_asr
 
-asr_model_name_gemini = "gemini-1.5-flash-001" 
+asr_model_name_gemini = "gemini-1.5-flash-002" 
 TARGET_LANGUAGE = 'English'
 
 FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
@@ -114,7 +39,6 @@ LANGUAGE_CODE_DIC = {
 }
 
 def perform_google_cloud_connectivity_tests(project_id, location):
-    # ... (Your existing function - keep as is)
     logger.info("[ConnectivityTest] Starting Google Cloud connectivity tests...")
     speech_v2_ok = False; vertex_ai_ok = False
     try:
