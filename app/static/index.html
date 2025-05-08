@@ -8,17 +8,19 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
         :root {
-            --primary-color: #007bff; /* A nice blue */
-            --secondary-color: #6c757d; /* Grey for secondary elements */
-            --success-color: #28a745; /* Green for start/success */
-            --danger-color: #dc3545;  /* Red for stop/error */
-            --light-bg: #f8f9fa;     /* Light background for page */
-            --dark-text: #343a40;    /* Dark text for readability */
-            --light-text: #ffffff;   /* Light text for dark backgrounds */
-            --border-color: #dee2e6; /* Subtle border color */
-            --card-bg: #ffffff;      /* Background for containers */
-            --shadow: 0 4px 12px rgba(0, 0, 0, 0.1); /* Softer shadow */
-            --border-radius: 8px; /* Consistent border radius */
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --danger-color: #dc3545;
+            --warning-color: #ffc107; /* For toggle button 'off' state */
+            --info-color: #17a2b8;   /* For toggle button 'on' state (can be same as success or primary) */
+            --light-bg: #f4f7f6;     /* Slightly softer light background */
+            --dark-text: #343a40;
+            --light-text: #ffffff;
+            --border-color: #dee2e6;
+            --card-bg: #ffffff;
+            --shadow: 0 6px 18px rgba(0, 0, 0, 0.1); /* Slightly more pronounced shadow */
+            --border-radius: 8px;
         }
 
         * {
@@ -31,11 +33,11 @@
             font-family: 'Roboto', sans-serif;
             background-color: var(--light-bg);
             color: var(--dark-text);
-            line-height: 1.6;
+            line-height: 1.7; /* Improved line height for readability */
             padding: 20px;
             display: flex;
             justify-content: center;
-            align-items: flex-start; /* Align to top if content is less than screen height */
+            align-items: flex-start;
             min-height: 100vh;
         }
 
@@ -45,190 +47,177 @@
             border-radius: var(--border-radius);
             box-shadow: var(--shadow);
             width: 100%;
-            max-width: 800px; /* Control max width for better readability */
+            max-width: 850px; /* Slightly wider */
         }
 
         h1 {
             text-align: center;
             color: var(--primary-color);
-            margin-bottom: 30px;
+            margin-bottom: 35px; /* More space below heading */
             font-weight: 500;
+            font-size: 2em; /* Larger heading */
+        }
+        h1 .fas { /* Icon in heading */
+            margin-right: 10px;
         }
 
         #controls {
             display: flex;
-            flex-wrap: wrap; /* Allow wrapping on smaller screens */
+            flex-wrap: wrap;
             align-items: center;
-            gap: 15px; /* Spacing between control elements */
-            margin-bottom: 20px;
-            padding: 15px;
-            background-color: #fdfdfd;
+            gap: 12px; /* Consistent gap */
+            margin-bottom: 25px;
+            padding: 20px;
+            background-color: #fdfdfd; /* Lighter than page bg for subtle contrast */
             border: 1px solid var(--border-color);
             border-radius: var(--border-radius);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
         }
 
         #controls label {
             font-weight: 500;
             margin-right: 5px;
+            color: #555;
         }
 
         #languageSelect {
-            padding: 10px 12px;
-            font-size: 0.95em;
+            padding: 10px 14px; /* More padding */
+            font-size: 1em;
             border-radius: var(--border-radius);
             border: 1px solid var(--border-color);
             background-color: var(--card-bg);
-            flex-grow: 1; /* Allow select to take available space */
-            min-width: 150px; /* Ensure it doesn't get too small */
+            flex-grow: 1;
+            min-width: 180px; /* Slightly wider */
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        #languageSelect:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
         }
 
+
         #controls button {
-            padding: 10px 20px;
-            font-size: 0.95em;
+            padding: 10px 18px; /* Slightly more padding */
+            font-size: 1em; /* Consistent font size */
             font-weight: 500;
             cursor: pointer;
             border-radius: var(--border-radius);
             border: none;
             color: var(--light-text);
-            transition: background-color 0.2s ease, transform 0.1s ease;
+            transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
             display: inline-flex;
             align-items: center;
-            gap: 8px; /* Space between icon and text */
+            gap: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         #controls button:hover {
-            opacity: 0.9;
+            opacity: 0.85;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
         }
         #controls button:active {
             transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
         }
         #controls button:disabled {
             background-color: var(--secondary-color) !important;
             cursor: not-allowed;
-            opacity: 0.7;
+            opacity: 0.6;
+            box-shadow: none;
         }
 
-        #startRecBtn {
-            background-color: var(--success-color);
-        }
+        #startRecBtn { background-color: var(--success-color); }
+        #stopRecBtn { background-color: var(--danger-color); }
 
-        #stopRecBtn {
-            background-color: var(--danger-color);
+        #toggleTtsBtn {
+            background-color: var(--info-color); /* Default 'On' state color */
+            min-width: 120px; /* Ensure text fits */
+            justify-content: center;
+        }
+        #toggleTtsBtn.tts-disabled {
+            background-color: var(--warning-color);
+            color: var(--dark-text); /* Darker text for yellow background */
         }
 
         #status {
-            margin-top: 20px;
-            margin-bottom: 15px;
+            margin-top: 25px;
+            margin-bottom: 20px;
             font-weight: 500;
             font-size: 1.1em;
-            padding: 10px;
-            background-color: #e9ecef;
+            padding: 12px 15px;
+            background-color: #eef2f5; /* Lighter, neutral status bg */
             border-radius: var(--border-radius);
             text-align: center;
+            color: #495057;
+            border: 1px solid #d6dde3;
         }
 
         .log-area {
             margin-top: 20px;
-            padding: 15px;
+            padding: 20px; /* More padding */
             border: 1px solid var(--border-color);
-            height: 350px; /* Slightly taller */
+            height: 400px; /* Taller */
             overflow-y: auto;
-            background-color: #f9f9f9;
+            background-color: #fbfdff; /* Very light blueish white */
             border-radius: var(--border-radius);
             box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
         }
 
         .log-entry {
             margin-bottom: 12px;
-            padding: 10px;
-            border-bottom: 1px solid #e9ecef;
-            border-radius: 4px; /* Subtle rounding for entries */
-            background-color: var(--card-bg); /* Each entry can have a card-like feel */
-            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            padding: 12px 15px; /* More padding */
+            border-radius: 6px; /* Softer radius */
+            background-color: var(--card-bg);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+            border-left: 4px solid transparent; /* For status indication */
+            transition: background-color 0.3s ease;
         }
-        .log-entry:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-        }
+        .log-entry:last-child { margin-bottom: 0; }
 
-        .transcript {
-            color: #0056b3; /* Darker blue for primary transcript */
-            font-weight: 500;
-        }
-        .transcript small { /* For timing info */
-            color: var(--secondary-color);
-            font-weight: 300;
-            font-size: 0.8em;
-        }
+        .transcript { color: var(--dark-text); font-weight: 500; }
+        .transcript small { color: var(--secondary-color); font-weight: 400; font-size: 0.85em; margin-left: 5px;}
+        .translation { color: var(--primary-color); font-style: normal; margin-top: 6px; display: block; font-weight: 400;}
+        .interim { color: #777; opacity: 0.9; }
 
-        .translation {
-            color: #17a2b8; /* Teal for translation */
-            font-style: italic;
-            margin-top: 5px; /* Space between transcript and translation */
-            display: block; /* Ensure it's on its own line if preceded by transcript */
-        }
-        .translation small { /* For timing info related to translation */
-            color: var(--secondary-color);
-            font-weight: 300;
-            font-size: 0.8em;
-        }
-
-        .interim {
-            color: #495057; /* Darker grey for interim */
-            opacity: 0.8;
-        }
-
-        .error {
+        .log-entry.error {
             color: var(--danger-color);
-            font-weight: bold;
-            background-color: #f8d7da; /* Light red background for errors */
-            border-left: 4px solid var(--danger-color);
-            padding-left: 10px;
+            font-weight: 500; /* Not too bold to keep it clean */
+            background-color: #ffebee; /* Lighter red */
+            border-left-color: var(--danger-color);
         }
-        .log-entry.info { /* For INFO messages */
-            color: #0c5460;
-            background-color: #d1ecf1;
-            border-left: 4px solid #bee5eb;
-            padding-left: 10px;
+        .log-entry.info {
+            color: #004085; /* Darker blue for info */
+            background-color: #e7f3fe; /* Lighter blue */
+            border-left-color: var(--primary-color);
         }
 
-
-        /* Custom Scrollbar (Webkit browsers) */
-        .log-area::-webkit-scrollbar {
-            width: 8px;
-        }
-        .log-area::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        .log-area::-webkit-scrollbar-thumb {
-            background: #ccc;
-            border-radius: 10px;
-        }
-        .log-area::-webkit-scrollbar-thumb:hover {
-            background: #aaa;
-        }
+        .log-area::-webkit-scrollbar { width: 10px; }
+        .log-area::-webkit-scrollbar-track { background: #e9ecef; border-radius: 10px; }
+        .log-area::-webkit-scrollbar-thumb { background: #adb5bd; border-radius: 10px; }
+        .log-area::-webkit-scrollbar-thumb:hover { background: var(--secondary-color); }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1><i class="fas fa-microphone-alt"></i> Live Speech & Translation</h1>
+        <h1><i class="fas fa-headset"></i> Live Speech & Translation AI</h1>
         <div id="controls">
-            <label for="languageSelect">Language:</label>
+            <label for="languageSelect">Record Language:</label>
             <select id="languageSelect">
                 <option value="en-US">English (US)</option>
-                <option value="zh-Hans-CN" selected>Chinese (Mandarin, Simplified)</option>
+                <option value="zh-Hans-CN" selected>Chinese (Mandarin)</option>
                 <option value="es-ES">Spanish (Spain)</option>
                 <option value="fr-FR">French (France)</option>
                 <option value="de-DE">German (Germany)</option>
                 <option value="ja-JP">Japanese (Japan)</option>
-                </select>
-            <button id="startRecBtn"><i class="fas fa-play"></i> Start Recording</button>
-            <button id="stopRecBtn" disabled><i class="fas fa-stop"></i> Stop Recording</button>
+            </select>
+            <button id="startRecBtn"><i class="fas fa-microphone"></i> Start</button>
+            <button id="stopRecBtn" disabled><i class="fas fa-microphone-slash"></i> Stop</button>
+            <button id="toggleTtsBtn" title="Toggle TTS Playback"><i class="fas fa-volume-up"></i> Playback On</button>
         </div>
-        <div id="status">Status: Idle</div>
-        <div class="log-area" id="outputLog">
-            </div>
+        <div id="status">Status: Idle. Press Start to begin.</div>
+        <div class="log-area" id="outputLog"></div>
     </div>
 
-    <script src="/static/script.js"></script> </body>
+    <script src="/static/script.js"></script>
+</body>
 </html>

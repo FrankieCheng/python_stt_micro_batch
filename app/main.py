@@ -56,7 +56,8 @@ manager = ConnectionManager()
 @app.websocket("/ws/stt")
 async def websocket_stt_endpoint(
     websocket: WebSocket,
-    language: str = Query("en-US", description="Language code for STT (e.g., en-US, zh-Hans-CN)")
+    language: str = Query("en-US", description="Language code for STT (e.g., en-US, zh-Hans-CN)"),
+    enable_tts: bool = Query(True, alias="enable_tts")
 ):
     await manager.connect(websocket)
 
@@ -82,7 +83,7 @@ async def websocket_stt_endpoint(
 
     try:
         audio_iterator = audio_chunk_receiver()
-        async for result_data in grpc_client_manager.stream_audio_to_grpc(audio_iterator, language):
+        async for result_data in grpc_client_manager.stream_audio_to_grpc(audio_iterator, language, enable_tts):
             await manager.send_json_to_websocket(result_data, websocket)
     except Exception as e:
         logger.error(f"Overall error in WebSocket handler for {websocket.client}: {e}", exc_info=True)

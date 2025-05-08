@@ -15,6 +15,7 @@ message RecognitionConfig {
   // Consider adding other common RecognitionConfig fields if your server uses them,
   // e.g., sample_rate_hertz, enable_automatic_punctuation, etc.
   // int32 sample_rate_hertz = 2; // Example
+  bool enable_tts = 3;
 }
 
 message StreamingConfig {

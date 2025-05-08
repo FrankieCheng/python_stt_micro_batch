@@ -4,6 +4,10 @@ const stopRecBtn = document.getElementById('stopRecBtn');
 const languageSelect = document.getElementById('languageSelect');
 const statusDiv = document.getElementById('status');
 const outputLog = document.getElementById('outputLog');
+const toggleTtsBtn = document.getElementById('toggleTtsBtn'); // Get the new button
+const enableTtsParam = ttsPlaybackEnabled ? 'true' : 'false';
+const wsUrl = `<span class="math-inline">\{wsProtocol\}//</span>{window.location.host}/ws/stt?language=<span class="math-inline">\{selectedLanguage\}&enable\_tts\=</span>{enableTtsParam}`;
+websocket = new WebSocket(wsUrl);
 
 let websocket;
 let audioContext;
@@ -11,12 +15,30 @@ let mediaStream;
 let scriptProcessorNode;
 let audioPlayer = new Audio(); // For playing received MP3s
 
-const TARGET_SAMPLE_RATE = 16000;
-// const BUFFER_SIZE = 4096; // For ~256ms chunks from client
-// const BUFFER_SIZE = 8192;   // For ~512ms chunks from client (as per recent discussion)
-const BUFFER_SIZE = 16384; // Current in your file: for ~1024ms chunks from client
 
-let lastSendTime = 0; // To track send time for RTT (approximate)
+// --- STATE VARIABLE FOR TTS PLAYBACK ---
+let ttsPlaybackEnabled = true; // Default to enabled
+
+const TARGET_SAMPLE_RATE = 16000;
+// Choose your desired client-side buffer size:
+// const BUFFER_SIZE = 4096; // For ~256ms chunks from client
+const BUFFER_SIZE = 8192;   // For ~512ms chunks from client
+// const BUFFER_SIZE = 16384; // For ~1024ms chunks from client (was in your last version)
+
+// --- Initialize TTS Button State and Visuals ---
+function updateTtsButtonVisuals() {
+    if (ttsPlaybackEnabled) {
+        toggleTtsBtn.innerHTML = '<i class="fas fa-volume-up"></i> Playback On';
+        toggleTtsBtn.classList.remove('tts-disabled'); // Uses main button style
+        toggleTtsBtn.style.backgroundColor = "var(--info-color)"; // Explicitly set "on" color
+        toggleTtsBtn.title = "Audio Playback is ON. Click to disable.";
+    } else {
+        toggleTtsBtn.innerHTML = '<i class="fas fa-volume-mute"></i> Playback Off';
+        toggleTtsBtn.classList.add('tts-disabled'); // Uses specific CSS for "off" state
+        toggleTtsBtn.style.backgroundColor = "var(--warning-color)"; // Explicitly set "off" color
+        toggleTtsBtn.title = "Audio Playback is OFF. Click to enable.";
+    }
+}
 
 function logMessage(data) {
     const entry = document.createElement('div');
@@ -25,27 +47,17 @@ function logMessage(data) {
     let content = '';
     if (data.type === 'transcription') {
         const confidenceScore = data.confidence ? data.confidence.toFixed(2) : 'N/A';
-        
-        // --- Timing Information Display ---
         let timingDetails = [];
         if (data.stt_duration_ms) {
             timingDetails.push(`STT: ${data.stt_duration_ms}ms`);
         }
-        if (data.translation_duration_ms) { // Assuming server might send this
+        if (data.translation_duration_ms) {
             timingDetails.push(`Translate: ${data.translation_duration_ms}ms`);
         }
-        if (data.tts_duration_ms) {
-            timingDetails.push(`TTS: ${data.tts_duration_ms}ms`);
+        if (data.tts_duration_ms) { // This is server-side TTS generation time
+            timingDetails.push(`TTS Gen: ${data.tts_duration_ms}ms`);
         }
-        // Approximate RTT if we had sendTime (more complex to correlate accurately in stream)
-        // if (data.is_final && lastSendTime > 0) {
-        //     const rtt = performance.now() - lastSendTime;
-        //     timingDetails.push(`Approx. RTT: ${rtt.toFixed(0)}ms`);
-        //     lastSendTime = 0; // Reset for next final segment
-        // }
-        
         let timingString = timingDetails.length > 0 ? ` <small>[${timingDetails.join(', ')}]</small>` : '';
-        // --- End Timing Information Display ---
 
         content = `<span class="${data.is_final ? 'transcript' : 'transcript interim'}">Transcript: ${data.transcript}${timingString}</span>`;
         if (data.translation) {
@@ -53,12 +65,12 @@ function logMessage(data) {
         }
 
     } else if (data.type === 'error') {
-        content = `<span class="error">Error: ${data.message}</span>`;
+        entry.classList.add('error'); // Add class for specific styling
+        content = `<span class="error-message">Error: ${data.message}</span>`; // Use a class for the message itself if needed
     } else if (data.type === 'info') {
-        entry.classList.add('info'); // Add this line
+        entry.classList.add('info'); // Add class for specific styling
         content = `<span>INFO: ${data.message}</span>`;
     } else {
-        // For debugging, show the whole data object if it's an unknown type
         content = `<span>UNKNOWN DATA: ${JSON.stringify(data)}</span>`;
         console.warn("Received unknown data structure:", data);
     }
@@ -66,7 +78,8 @@ function logMessage(data) {
     outputLog.appendChild(entry);
     outputLog.scrollTop = outputLog.scrollHeight;
 
-    if (data.type === 'transcription' && data.is_final && data.audio_data_b64 && data.audio_format === 'mp3') {
+    // --- MODIFIED PLAYBACK CONDITION ---
+    if (ttsPlaybackEnabled && data.type === 'transcription' && data.is_final && data.audio_data_b64 && data.audio_format === 'mp3') {
         playMp3FromBase64(data.audio_data_b64);
     }
 }
@@ -82,14 +95,13 @@ function playMp3FromBase64(base64String) {
     audioPlayer.play()
         .then(() => {
             const playbackSetupTime = performance.now() - playbackStartTime;
-            logMessage({ type: 'info', message: `Audio playback started. (Setup: ${playbackSetupTime.toFixed(0)}ms)` });
+            logMessage({ type: 'info', message: `Audio playback started. (Client Play Setup: ${playbackSetupTime.toFixed(0)}ms)` });
         })
         .catch(e => {
             logMessage({ type: 'error', message: `Audio playback error: ${e.message}` });
             console.error("Audio playback error:", e);
         });
 }
-
 
 startRecBtn.onclick = async () => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -99,7 +111,7 @@ startRecBtn.onclick = async () => {
 
     startRecBtn.disabled = true;
     stopRecBtn.disabled = false;
-    outputLog.innerHTML = ''; // Clear previous logs
+    outputLog.innerHTML = ''; 
     updateStatus('Requesting microphone access...');
 
     try {
@@ -115,51 +127,48 @@ startRecBtn.onclick = async () => {
         } else {
             console.log(`AudioContext successfully started at TARGET_SAMPLE_RATE: ${audioContext.sampleRate}Hz.`);
         }
+        window.loggedInputBufferSampleRate = false; 
 
         const source = audioContext.createMediaStreamSource(mediaStream);
-        // The bufferSize for createScriptProcessor must be a power of 2, from 256 to 16384.
-        // 4096 samples @ 16kHz = 256ms
-        // 8192 samples @ 16kHz = 512ms
-        // 16384 samples @ 16kHz = 1024ms
         scriptProcessorNode = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
         scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
             if (!websocket || websocket.readyState !== WebSocket.OPEN) return;
             
-            if (!window.loggedInputBufferSampleRate) { // Log only once
+            if (!window.loggedInputBufferSampleRate) { 
                 console.log("ScriptProcessorNode InputBuffer sample rate:", audioProcessingEvent.inputBuffer.sampleRate);
                 window.loggedInputBufferSampleRate = true; 
             }
-
-            const inputBuffer = audioProcessingEvent.inputBuffer;
-            // Get data for the first channel
-            const pcmData = inputBuffer.getChannelData(0); // Float32 PCM data
-
-            // If input sample rate is different from TARGET_SAMPLE_RATE, resampling is needed here or on server.
-            // For simplicity, assuming inputBuffer.sampleRate matches TARGET_SAMPLE_RATE due to context hint.
-            // If not, pcmData is at audioContext.sampleRate.
-
-            // lastSendTime = performance.now(); // For RTT - more complex to correlate
+            const pcmData = audioProcessingEvent.inputBuffer.getChannelData(0);
             websocket.send(pcmData.buffer); 
         };
 
         source.connect(scriptProcessorNode);
-        scriptProcessorNode.connect(audioContext.destination); // Necessary for onaudioprocess to fire
+        scriptProcessorNode.connect(audioContext.destination);
 
         const selectedLanguage = languageSelect.value;
         const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws/stt?language=${selectedLanguage}`;
+        
+        // --- ADD TTS PREFERENCE TO WEBSOCKET URL ---
+        // This part is for the *advanced* solution where server avoids TTS generation.
+        // For the current client-side only toggle, this isn't strictly needed yet,
+        // but good for future extension.
+        // const enableTtsParam = ttsPlaybackEnabled ? 'true' : 'false';
+        // const wsUrl = `${wsProtocol}//${window.location.host}/ws/stt?language=${selectedLanguage}&enable_tts=${enableTtsParam}`;
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/stt?language=${selectedLanguage}`; // Current simpler version
+
+
         websocket = new WebSocket(wsUrl);
 
         websocket.onopen = () => {
-            updateStatus(`Connected. Recording started... Language: ${selectedLanguage}. Sending audio in ~${((BUFFER_SIZE / TARGET_SAMPLE_RATE) * 1000).toFixed(0)}ms chunks.`);
+            updateStatus(`Connected. Language: ${selectedLanguage}. Sending audio in ~${((BUFFER_SIZE / TARGET_SAMPLE_RATE) * 1000).toFixed(0)}ms chunks.`);
             logMessage({type: 'info', message: `WebSocket open. Language: ${selectedLanguage}`});
         };
 
         websocket.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
-                logMessage(data); // logMessage will now display timings if present
+                logMessage(data);
             } catch (e) {
                 logMessage({type: 'error', message: 'Received malformed JSON from server.'});
                 console.error("Error parsing server message:", e, event.data);
@@ -190,7 +199,7 @@ startRecBtn.onclick = async () => {
 
 function cleanupAudioResources() {
     if (scriptProcessorNode) {
-        scriptProcessorNode.onaudioprocess = null; // Stop processing audio
+        scriptProcessorNode.onaudioprocess = null; 
         scriptProcessorNode.disconnect();
         scriptProcessorNode = null;
     }
@@ -198,18 +207,10 @@ function cleanupAudioResources() {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
     }
-    // It's generally better not to close/recreate audioContext too often unless necessary.
-    // If you do, ensure it's fully stopped/closed.
-    // if (audioContext && audioContext.state !== 'closed') {
-    //     audioContext.close().catch(e => console.error("Error closing AudioContext:", e));
-    //     audioContext = null;
-    // }
-
     if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
         websocket.close(1000, "Client cleanup");
     }
     websocket = null;
-
     startRecBtn.disabled = false;
     stopRecBtn.disabled = true;
 }
@@ -220,6 +221,31 @@ stopRecBtn.onclick = () => {
     logMessage({type: 'info', message: 'Recording stopped by user.'});
 };
 
+// --- TTS TOGGLE BUTTON LOGIC ---
+if (toggleTtsBtn) { // Check if button exists
+    toggleTtsBtn.onclick = () => {
+        ttsPlaybackEnabled = !ttsPlaybackEnabled; // Toggle the state
+        updateTtsButtonVisuals();
+        logMessage({ type: 'info', message: `Audio Playback ${ttsPlaybackEnabled ? 'Enabled' : 'Disabled'}.` });
+        // Optional: Store preference in localStorage
+        // localStorage.setItem('ttsPlaybackEnabled', ttsPlaybackEnabled);
+    };
+}
+
+// --- Initialize button text/icon on page load ---
+document.addEventListener('DOMContentLoaded', (event) => {
+    // Optional: Load preference from localStorage
+    // const savedTtsPref = localStorage.getItem('ttsPlaybackEnabled');
+    // if (savedTtsPref !== null) {
+    //     ttsPlaybackEnabled = JSON.parse(savedTtsPref);
+    // }
+    if (toggleTtsBtn) { // Check if button exists before updating
+        updateTtsButtonVisuals();
+    }
+    updateStatus('Idle. Select language and press Start.');
+});
+
+
 audioPlayer.onended = () => {
     logMessage({ type: 'info', message: 'Audio playback finished.' });
 };
@@ -227,5 +253,3 @@ audioPlayer.onerror = (e) => {
     logMessage({ type: 'error', message: `Audio playback failed: ${audioPlayer.error?.message || 'Unknown audio error'}` });
     console.error("Audio player error", audioPlayer.error);
 };
-
-updateStatus('Idle. Select language and press Start Recording.');
