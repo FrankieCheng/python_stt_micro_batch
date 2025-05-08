@@ -157,4 +157,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='SpeechToText service')
     parser.add_argument('-p', action='store', dest='port', type=int, default=9080, help='Port to listen on.')
     parser.add_argument('-project', action='store', dest='project', type=str, required=True, help='Google Cloud Project ID.')
-    parser.add_argument('-location', action='store', dest='location', type=str, default='global', help='Google Cloud Location (e.g., us-central1,
+    parser.add_argument('-location', action='store', dest='location', type=str, default='global', help='Google Cloud Location (e.g., us-central1, global for some services).')
+    parser.add_argument('-recognizer', action='store', dest='recognizer_id', type=str, default='_',
+                        help='Specific Recognizer ID to use (e.g., from Speech-to-Text v2). Use "_" or leave empty for default model behavior.')
+    args = parser.parse_args()
+
+    logger.info(f"Attempting to start STT server with: port={args.port}, project='{args.project}', location='{args.location}', recognizer_id='{args.recognizer_id}'")
+    asyncio.run(serve(args.port, args.project, args.location, args.recognizer_id))
