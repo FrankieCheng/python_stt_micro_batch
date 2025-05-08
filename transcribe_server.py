@@ -363,15 +363,18 @@ class TranscriptionServer:
             # Save the snapshot of self.all_chunks that these segments refer to (or relevant part)
             # This was your "debug_audio_websites"
             try:
-                debug_audio_dir_vad_input = "debug_audio_vad_input" 
-                if not os.path.exists(debug_audio_dir_vad_input):
-                    os.makedirs(debug_audio_dir_vad_input)
-                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                # Save current_all_chunks_for_vad as it's the buffer this VAD pass worked on
-                vad_input_filename = os.path.join(debug_audio_dir_vad_input, f"vad_pass_buffer_{timestamp_str}_len{len(current_all_chunks_for_vad)}.wav")
-                if current_all_chunks_for_vad.numel() > 0 :
-                     self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, vad_input_filename)
-                     logger.info(f"Saved VAD pass input buffer to: {vad_input_filename}")
+                if DEBUG_AUDIO_SAVE:
+                    debug_audio_dir_vad_input = "debug_audio_vad_input" 
+                    if not os.path.exists(debug_audio_dir_vad_input):
+                        os.makedirs(debug_audio_dir_vad_input)
+                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    # Save current_all_chunks_for_vad as it's the buffer this VAD pass worked on
+                    vad_input_filename = os.path.join(debug_audio_dir_vad_input, f"vad_pass_buffer_{timestamp_str}_len{len(current_all_chunks_for_vad)}.wav")
+                    if current_all_chunks_for_vad.numel() > 0 :
+                        self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, vad_input_filename)
+                        logger.info(f"Saved VAD pass input buffer to: {vad_input_filename}")
+                else:
+                    logger.debug("Not saving VAD pass input buffer debug audio.")
             except Exception as save_e:
                 logger.error(f"Failed to save VAD pass input buffer debug audio: {save_e}", exc_info=True)
 
@@ -527,15 +530,18 @@ class TranscriptionServer:
             return None
         
         try:
-            debug_audio_dir_vad_input = "debug_audio_vad_input" # New directory for clarity
-            if not os.path.exists(debug_audio_dir_vad_input):
-                os.makedirs(debug_audio_dir_vad_input)
-                logger.info(f"Created directory for VAD input debug audio: {debug_audio_dir_vad_input}")
-            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            vad_input_filename = os.path.join(debug_audio_dir_vad_input, f"vad_input_buffer_{timestamp_str}_len{len(current_all_chunks_for_vad)}.wav")
-            if current_all_chunks_for_vad.numel() > 0 : # Only save if not empty
-                 self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, vad_input_filename)
-                 logger.info(f"Saved current VAD input buffer to: {vad_input_filename}")
+            if DEBUG_AUDIO_SAVE:
+                debug_audio_dir_vad_input = "debug_audio_vad_input" # New directory for clarity
+                if not os.path.exists(debug_audio_dir_vad_input):
+                    os.makedirs(debug_audio_dir_vad_input)
+                    logger.info(f"Created directory for VAD input debug audio: {debug_audio_dir_vad_input}")
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                vad_input_filename = os.path.join(debug_audio_dir_vad_input, f"vad_input_buffer_{timestamp_str}_len{len(current_all_chunks_for_vad)}.wav")
+                if current_all_chunks_for_vad.numel() > 0 : # Only save if not empty
+                    self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, vad_input_filename)
+                    logger.info(f"Saved current VAD input buffer to: {vad_input_filename}")
+            else:
+                logger.debug("Not saving VAD input buffer debug audio.")
         except Exception as save_e:
             logger.error(f"Failed to save VAD input buffer debug audio: {save_e}", exc_info=True)
         # +++ END DEBUG SAVING +++
