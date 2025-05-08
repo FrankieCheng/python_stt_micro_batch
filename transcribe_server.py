@@ -26,7 +26,7 @@ from vad import VADIterator
 
 from prompts import prompt_template_ast, prompt_template_asr
 
-asr_model_name_gemini = "gemini-1.5-flash-001" # Changed back from 2.0-flash-lite-001 as per your current file top
+asr_model_name_gemini = "gemini-1.5-flash-002" # Changed back from 2.0-flash-lite-001 as per your current file top
 TARGET_LANGUAGE = 'English'
 
 FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
@@ -73,40 +73,93 @@ def perform_google_cloud_connectivity_tests(project_id, location):
     logger.info("[ConnectivityTest] All Google Cloud connectivity tests PASSED.")
     return True
 
+import logging
+import asyncio
+import functools 
+import io
+import base64
+import torch
+import torchaudio
+import numpy as np
+import json
+from datetime import datetime
+import grpc 
+import os
+
+from google.api_core.client_options import ClientOptions
+from google.cloud.speech_v2 import SpeechClient
+from google.cloud.speech_v2.types import cloud_speech
+from google.auth.exceptions import DefaultCredentialsError
+
+import vertexai
+from vertexai.generative_models import GenerativeModel, Part
+import vertexai.generative_models as generative_models
+
+import stt_pb2 as stt__pb2
+from vad import VADIterator
+from prompts import prompt_template_ast, prompt_template_asr
+
+asr_model_name_gemini = "gemini-1.5-flash-001" 
+TARGET_LANGUAGE = 'English'
+
+FORMAT = '%(asctime)s - %(levelname)s - %(name)s - [%(funcName)s] - %(message)s'
+logging.basicConfig(level=logging.INFO, format=FORMAT, datefmt='%Y-%m-%d %H:%M:%S')
+logger = logging.getLogger('TranscriptionServer')
+
+LANGUAGE_CODE_DIC = {
+    'ar-EG':'Arabic', 'zh-Hans-CN':'Chinese', 'cmn-Hant-TW':'Traditional Chinese',
+    'nl-NL':'Dutch', 'en-US':'English', 'fr-FR':'French', 'de-DE':'German',
+    'hi-IN':'Hindi', 'it-IT':'Italian', 'ja-JP':'Japanese', 'pt-PT':'Portuguese',
+    'es-ES':'Spanish'
+}
+
+def perform_google_cloud_connectivity_tests(project_id, location):
+    # ... (Your existing function - keep as is)
+    logger.info("[ConnectivityTest] Starting Google Cloud connectivity tests...")
+    speech_v2_ok = False; vertex_ai_ok = False
+    try:
+        endpoint = f"{location}-speech.googleapis.com"; speech_v2_test_client = SpeechClient(client_options=ClientOptions(api_endpoint=endpoint))
+        logger.info(f"[ConnectivityTest] SpeechClient (v2) created for {endpoint}."); del speech_v2_test_client; speech_v2_ok = True
+    except Exception as e: logger.error(f"[ConnectivityTest] FAILED SpeechClient (v2) for {endpoint}: {e}", exc_info=True)
+    try:
+        vertexai.init(project=project_id, location=location); logger.info(f"[ConnectivityTest] Vertex AI initialized for {project_id}/{location}.")
+        _ = GenerativeModel(asr_model_name_gemini); logger.info(f"[ConnectivityTest] Gemini model {asr_model_name_gemini} ok.")
+        vertex_ai_ok = True
+    except Exception as e: logger.error(f"[ConnectivityTest] FAILED Vertex AI/Gemini for {project_id}/{location}: {e}", exc_info=True)
+    if not (speech_v2_ok and vertex_ai_ok): logger.critical("[ConnectivityTest] One or more Google Cloud tests FAILED."); return False
+    logger.info("[ConnectivityTest] All Google Cloud connectivity tests PASSED."); return True
+
+
 class TranscriptionServer:
     SAMPLING_RATE = 16000
-    WINDOW_SIZE_SAMPLES = 1024 # Your current setting
-    SPEECH_THRESHOLD = 0.33    # Your current setting
+    WINDOW_SIZE_SAMPLES = 1024 
+    SPEECH_THRESHOLD = 0.33    
 
-    def __init__(self, project_id, location, recognizer_id_str):
-        # ... (implementation as you provided - client init, VAD init, etc.) ...
-        logger.info(f"Initializing TranscriptionServer with project='{project_id}', location='{location}', recognizer_id='{recognizer_id_str}'")
+    def __init__(self, project_id, location, recognizer_id_str, language_code: str): # Added language_code
+        logger.info(f"Initializing TranscriptionServer for lang '{language_code}', project='{project_id}', location='{location}', recognizer_id='{recognizer_id_str}'")
         torch.set_num_threads(1)
         self.PROJECT_ID = project_id
         self.LOCATION = location
         self.recognizer_id_str = recognizer_id_str
+        self.language_code = language_code # Store language_code for the processing loop
+
+        # Connectivity and client setup (as in your current code)
         if not perform_google_cloud_connectivity_tests(self.PROJECT_ID, self.LOCATION):
             logger.error("Critical connectivity tests failed. TranscriptionServer may not function correctly.")
-        self.speech_v2_client = None
-        self.gemini_model_instance = None
+        self.speech_v2_client = None; self.gemini_model_instance = None
         try:
             speech_endpoint = f"{self.LOCATION}-speech.googleapis.com"
-            logger.info(f"Creating persistent SpeechClient (v2) with endpoint: {speech_endpoint}")
             self.speech_v2_client = SpeechClient(client_options=ClientOptions(api_endpoint=speech_endpoint))
             logger.info("Persistent SpeechClient (v2) created.")
-        except Exception as e:
-            logger.error(f"Failed to create persistent SpeechClient (v2): {e}", exc_info=True)
+        except Exception as e: logger.error(f"Failed to create persistent SpeechClient (v2): {e}", exc_info=True)
         try:
-            logger.info(f"Initializing persistent Vertex AI for project: {self.PROJECT_ID}, location: {self.LOCATION}")
             vertexai.init(project=self.PROJECT_ID, location=self.LOCATION)
-            logger.info("Persistent Vertex AI initialized.")
-            logger.info(f"Creating persistent Gemini Model instance: {asr_model_name_gemini}")
             self.gemini_model_instance = GenerativeModel(asr_model_name_gemini)
-            logger.info("Persistent Gemini Model instance created.")
-        except Exception as e:
-            logger.error(f"Failed to initialize persistent Vertex AI or Gemini Model: {e}", exc_info=True)
+            logger.info("Persistent Vertex AI initialized and Gemini Model instance created.")
+        except Exception as e: logger.error(f"Failed to initialize persistent Vertex AI or Gemini Model: {e}", exc_info=True)
+
         self.vad_model = torch.jit.load('silero_vad/silero_vad.jit')
-        self.all_chunks = torch.tensor([])
+        self.all_chunks = torch.tensor([]) # Accumulates all audio for this instance
         self.vad_speech_threshold_iterator = 0.5
         self.min_silence_duration_ms = 400
         self.vad_iterator = VADIterator(model=self.vad_model, threshold=self.vad_speech_threshold_iterator,
@@ -114,6 +167,287 @@ class TranscriptionServer:
                                         min_silence_duration_ms=self.min_silence_duration_ms)
         self.last_end = 0
         self.last_start = -1
+        
+        # --- New attributes for pipelined processing ---
+        self._loop = asyncio.get_running_loop()
+        self._raw_audio_queue = asyncio.Queue() # Queue for (audio_chunk_tensor)
+        self._results_queue = asyncio.Queue()   # Queue for fully processed TranscriptStreamResponse objects
+        self._processing_pipeline_task = None   # Holds the main background processing task
+        self._stop_event = asyncio.Event()      # To signal the pipeline to stop
+        self._segment_id_counter = 0            # To maintain order of VAD segments
+        self._active_asr_tasks = {}             # To track {segment_id: asr_task}
+        self._processed_segments_buffer = {}    # To reorder {segment_id: processed_segment_dict}
+        self._next_segment_id_to_yield = 0
+        # Semaphore to limit concurrent calls to Google APIs
+        self._api_call_semaphore = asyncio.Semaphore(5) # Limit to 5 concurrent Google API calls
+
+    def start_processing_pipeline(self):
+        if self._processing_pipeline_task is None or self._processing_pipeline_task.done():
+            self._stop_event.clear()
+            self.cleanup() # Reset VAD states and all_chunks for a new pipeline run
+            self._processing_pipeline_task = self._loop.create_task(self._pipeline_processor())
+            logger.info("Transcription processing pipeline started.")
+        else:
+            logger.warning("Processing pipeline already running.")
+
+    async def stop_processing_pipeline(self):
+        logger.info("Stopping transcription processing pipeline...")
+        self._stop_event.set()
+        self._raw_audio_queue.put_nowait(None) # Sentinel to unblock queue getter
+        if self._processing_pipeline_task:
+            try:
+                await asyncio.wait_for(self._processing_pipeline_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Processing pipeline did not stop gracefully within timeout.")
+                self._processing_pipeline_task.cancel()
+            except Exception as e:
+                logger.error(f"Error during pipeline stop: {e}", exc_info=True)
+        logger.info("Transcription processing pipeline stopped.")
+
+    async def submit_audio_chunk(self, new_chunk_bytes):
+        """Called by stt_server.py to feed new audio."""
+        if self._stop_event.is_set():
+            logger.warning("Submit_audio_chunk called after stop signal. Ignoring.")
+            return
+
+        logger.debug(f"submit_audio_chunk: len={len(new_chunk_bytes)}")
+        try:
+            audio_array = np.frombuffer(new_chunk_bytes, dtype=np.float32)
+            current_chunks_tensor = torch.from_numpy(audio_array.copy())
+            if current_chunks_tensor.numel() > 0:
+                max_val = torch.abs(current_chunks_tensor).max()
+                if max_val > 0:
+                    current_chunks_tensor = current_chunks_tensor / max_val
+            await self._raw_audio_queue.put(current_chunks_tensor)
+        except Exception as e:
+            logger.error(f"Error in submit_audio_chunk: {e}", exc_info=True)
+
+    async def _pipeline_processor(self):
+        """Main background task that processes audio from _raw_audio_queue."""
+        while not self._stop_event.is_set():
+            try:
+                current_chunks_tensor = await self._raw_audio_queue.get()
+                if current_chunks_tensor is None: # Sentinel for stopping
+                    logger.info("_pipeline_processor received stop sentinel.")
+                    break
+                
+                # This is essentially the VAD part of your process_new_chunks
+                vad_segments_for_asr = self._perform_vad_and_segmentation(current_chunks_tensor)
+
+                if vad_segments_for_asr:
+                    target_gemini_language_for_ast = LANGUAGE_CODE_DIC.get(self.language_code, "English")
+                    for segment_info_from_vad in vad_segments_for_asr:
+                        current_seq_id = self._segment_id_counter
+                        self._segment_id_counter += 1
+                        
+                        segment_audio_b64 = self._prepare_segment_audio_for_api(segment_info_from_vad)
+                        if not segment_audio_b64: # Empty or invalid segment
+                            # Immediately place a placeholder in processed_segments_buffer to maintain order
+                            empty_processed_segment = segment_info_from_vad.copy()
+                            empty_processed_segment.update({'transcript': '', 'stt_duration': 0, 'translation': '', 'translation_duration': 0})
+                            self._processed_segments_buffer[current_seq_id] = empty_processed_segment
+                            logger.warning(f"Skipped ASR for empty/invalid segment {current_seq_id}, start={segment_info_from_vad['start']}")
+                            continue
+
+                        logger.info(f"Launching ASR task for segment ID {current_seq_id}, start={segment_info_from_vad['start']}")
+                        asr_task = self._loop.create_task(
+                            self._process_single_segment_with_api_semaphore(
+                                current_seq_id,
+                                segment_info_from_vad.copy(), 
+                                segment_audio_b64,
+                                self.language_code, # Original lang code
+                                target_gemini_language_for_ast
+                            )
+                        )
+                        self._active_asr_tasks[current_seq_id] = asr_task
+                self._raw_audio_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error in _pipeline_processor loop: {e}", exc_info=True)
+                # Avoid breaking the loop for isolated errors if possible, or implement better recovery
+        
+        # Wait for any remaining active ASR tasks to complete after stop signal
+        if self._active_asr_tasks:
+            logger.info(f"Waiting for {len(self._active_asr_tasks)} remaining ASR tasks to complete post-stop...")
+            await asyncio.gather(*self._active_asr_tasks.values(), return_exceptions=True)
+        logger.info("_pipeline_processor finished.")
+
+    def _prepare_segment_audio_for_api(self, segment_info):
+        current_start_index = segment_info['start']
+        current_end_index = segment_info.get('end', segment_info.get('immediate'))
+        if current_end_index is None or current_end_index <= current_start_index:
+            logger.warning(f"Invalid segment indices for API prep: start={current_start_index}, end={current_end_index}")
+            return None
+        torch_segment_chunks = self.all_chunks[current_start_index:current_end_index]
+        if torch_segment_chunks.numel() == 0:
+            logger.warning(f"Segment for API resulted in empty torch_chunks: start={current_start_index}, end={current_end_index}")
+            return None
+        
+        # Debug save for audio sent to Gemini
+        try:
+            debug_audio_dir_gemini = "debug_audio_clips_gemini"
+            if not os.path.exists(debug_audio_dir_gemini): os.makedirs(debug_audio_dir_gemini)
+            timestamp_str_gemini = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename_gemini = os.path.join(debug_audio_dir_gemini, f"to_gemini_{timestamp_str_gemini}_s{current_start_index}_e{current_end_index}.wav")
+            self.save_tensor_to_wav(torch_segment_chunks, self.SAMPLING_RATE, filename_gemini)
+            logger.info(f"Saved debug audio segment for API to: {filename_gemini}")
+        except Exception as save_e:
+            logger.error(f"Failed to save debug audio segment for API: {save_e}", exc_info=True)
+        
+        return self.tensor_to_base64(torch_segment_chunks, self.SAMPLING_RATE)
+
+    async def _process_single_segment_with_api_semaphore(self, segment_id, segment_dict_copy, audio_b64_content, language_code, target_gemini_language_for_ast):
+        """Wrapper for _process_single_segment_concurrently that uses a semaphore and queues result."""
+        async with self._api_call_semaphore: # Limit concurrent Google API calls
+            processed_segment = await self._process_single_segment_concurrently(
+                segment_dict_copy, audio_b64_content, language_code, target_gemini_language_for_ast
+            )
+        # Put the processed segment into the reordering buffer
+        self._processed_segments_buffer[segment_id] = processed_segment
+        # Remove from active tasks
+        if segment_id in self._active_asr_tasks: # Should always be true
+            del self._active_asr_tasks[segment_id]
+        logger.info(f"Finished ASR task for segment ID {segment_id}, start={processed_segment['start']}")
+        # This doesn't directly put to results_queue; get_ordered_results will poll _processed_segments_buffer
+
+    async def get_ordered_results(self) -> stt__pb2.TranscriptStreamResponse | None: # Async generator
+        """Pulls results from the buffer in order and yields them as TranscriptStreamResponse."""
+        while not self._stop_event.is_set() or self._processed_segments_buffer or self._active_asr_tasks:
+            if self._next_segment_id_to_yield in self._processed_segments_buffer:
+                segment_to_yield_dict = self._processed_segments_buffer.pop(self._next_segment_id_to_yield)
+                logger.info(f"Yielding ordered segment ID {self._next_segment_id_to_yield}, start={segment_to_yield_dict['start']}")
+                # Convert this single processed segment_dict into a TranscriptStreamResponse
+                # recv_audio_output expects a list of segments
+                response_proto = self.recv_audio_output([segment_to_yield_dict]) 
+                self._next_segment_id_to_yield += 1
+                if response_proto: # recv_audio_output might return None if segment was empty after processing
+                    yield response_proto # Yield one response per segment
+            else:
+                # If the next expected segment is not ready, but there are still active tasks or unprocessed audio, wait briefly.
+                # If no active tasks and no more audio expected and buffer doesn't have next, we might be done.
+                if not self._active_asr_tasks and self._raw_audio_queue.empty() and self._next_segment_id_to_yield not in self._processed_segments_buffer:
+                    if self._stop_event.is_set(): # Ensure we exit if stopping
+                        logger.info("get_ordered_results: Stop event set and no more pending work.")
+                        break
+                await asyncio.sleep(0.05) # Poll buffer briefly
+        logger.info("get_ordered_results stream finished.")
+
+
+    def _perform_vad_and_segmentation(self, current_chunks_tensor):
+        """This is the VAD part of your original process_new_chunks."""
+        # It appends to self.all_chunks and returns a list of segment_info dicts
+        # This should NOT do ASR/AST calls.
+        # --- Start of VAD and Segment Identification Logic ---
+        # (Copied and adapted from your process_new_chunks)
+        last_round_end = ((int)(len(self.all_chunks)/self.WINDOW_SIZE_SAMPLES))*self.WINDOW_SIZE_SAMPLES
+        current_last_start = self.last_start # Use instance's running last_start
+        
+        self.all_chunks = torch.cat([self.all_chunks, current_chunks_tensor])
+        current_all_chunks_for_vad = self.all_chunks.clone() # Process the whole buffer each time VAD part runs
+        
+        # Debug save for what VAD is looking at
+        # self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, f"debug_vad_input_pass_{self._segment_id_counter}.wav")
+
+        current_vad_segments = [] # Segments detected *in this specific VAD pass*
+        has_new_speech_in_current_pass = False
+
+        for i in range(last_round_end, len(current_all_chunks_for_vad), self.WINDOW_SIZE_SAMPLES):
+            loop_end_index = i + self.WINDOW_SIZE_SAMPLES
+            chunk_for_vad_iter = current_all_chunks_for_vad[i: loop_end_index]
+            
+            if chunk_for_vad_iter.numel() < self.WINDOW_SIZE_SAMPLES and loop_end_index < len(current_all_chunks_for_vad):
+                 logger.debug(f"Skipping direct VAD check for incomplete window of size {len(chunk_for_vad_iter)}")
+            elif loop_end_index > last_round_end and len(chunk_for_vad_iter) == self.WINDOW_SIZE_SAMPLES :
+                if self.vad_model(chunk_for_vad_iter, self.SAMPLING_RATE).item() > self.SPEECH_THRESHOLD:
+                    has_new_speech_in_current_pass = True # Speech detected in this pass
+            
+            if loop_end_index >= len(current_all_chunks_for_vad) -1: 
+                logging.debug("End of the audio buffer reached in VAD loop.")
+                if current_last_start != -1: 
+                    current_vad_segments.append({'start': current_last_start, 'immediate': i + len(chunk_for_vad_iter)})
+                break
+            
+            speech_dict = self.vad_iterator(chunk_for_vad_iter, return_seconds=False)
+            if speech_dict: 
+                if 'end' in speech_dict:
+                    logging.info(f"VADIterator found 'end': current_last_start={current_last_start}, end_offset={speech_dict['end']}")
+                    if current_last_start != -1:
+                         current_vad_segments.append({'start': current_last_start, 'end': speech_dict['end']})
+                    else: 
+                         logger.warning(f"VADIterator found 'end' but current_last_start was -1. Segment: {speech_dict}")
+                    current_last_start = -1 
+                    self.last_start = -1 
+                elif 'start' in speech_dict:
+                    current_last_start = speech_dict['start']
+                    self.last_start = speech_dict['start'] 
+                    logging.info(f"VADIterator found 'start': start_offset={current_last_start}")
+        
+        logger.info(f"VAD pass complete. has_new_speech_in_current_pass: {has_new_speech_in_current_pass}, VAD-iterator segments found this pass: {len(current_vad_segments)}")
+
+        if not current_vad_segments and not has_new_speech_in_current_pass:
+            logger.debug("No new speech segments from VAD in this pass.")
+            return [] # Return empty list
+
+        # --- Your existing segment filtering logic ---
+        segments_to_process_further = []
+        temp_start_for_filtering = 0
+        if current_vad_segments: # Use current_vad_segments found in *this* pass
+             temp_start_for_filtering = current_vad_segments[0].get('start',0)
+
+        for idx, seg_from_vad in enumerate(current_vad_segments):
+            is_last_segment_from_vad = (idx == len(current_vad_segments) - 1)
+            if 'end' in seg_from_vad:
+                seg_start = seg_from_vad.get('start', temp_start_for_filtering) 
+                if seg_start < seg_from_vad['end']: 
+                    segments_to_process_further.append({'start': seg_start, 'end': seg_from_vad['end']})
+                    temp_start_for_filtering = seg_from_vad['end']
+            elif 'immediate' in seg_from_vad and is_last_segment_from_vad: 
+                seg_start = seg_from_vad.get('start', temp_start_for_filtering)
+                if seg_start < seg_from_vad['immediate'] and (seg_from_vad['immediate'] - seg_start > self.SAMPLING_RATE * 0.4): 
+                    segments_to_process_further.append({'start': seg_start, 'immediate': seg_from_vad['immediate']})
+        
+        logger.info(f"Filtered segments for ASR/AST (pre-consolidation) this pass: {segments_to_process_further}")
+        
+        if not segments_to_process_further:
+            return []
+
+        # --- Your existing consolidation logic ---
+        if len(segments_to_process_further) > 2:
+            # ... (your consolidation logic, ensure it operates on segments_to_process_further) ...
+            # This part needs to be careful not to mix old state with new segments if self.all_chunks changes.
+            # The consolidation should ideally only work on segments fully contained in the current processing window.
+            # For now, keeping your logic as is:
+            logger.info(f"Consolidating {len(segments_to_process_further)} segments for transcription.")
+            last_segment_to_keep = segments_to_process_further[-1]
+            segments_to_consolidate = segments_to_process_further[:-1]
+            if segments_to_consolidate:
+                consolidated_start = segments_to_consolidate[0]['start']
+                consolidated_end = segments_to_consolidate[-1]['end'] if 'end' in segments_to_consolidate[-1] else segments_to_consolidate[-1]['immediate']
+                final_segments_for_asr = [{'start': consolidated_start, 'end': consolidated_end}]
+                final_segments_for_asr.append(last_segment_to_keep)
+            else:
+                 final_segments_for_asr = [last_segment_to_keep] if len(segments_to_process_further) == 1 else []
+            logger.info(f"Consolidated into {len(final_segments_for_asr)} segments: {final_segments_for_asr}")
+        else:
+            final_segments_for_asr = segments_to_process_further
+        
+        if final_segments_for_asr:
+            # Save the snapshot of self.all_chunks that these segments refer to (or relevant part)
+            # This was your "debug_audio_websites"
+            try:
+                debug_audio_dir_vad_input = "debug_audio_vad_input" 
+                if not os.path.exists(debug_audio_dir_vad_input):
+                    os.makedirs(debug_audio_dir_vad_input)
+                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                # Save current_all_chunks_for_vad as it's the buffer this VAD pass worked on
+                vad_input_filename = os.path.join(debug_audio_dir_vad_input, f"vad_pass_buffer_{timestamp_str}_len{len(current_all_chunks_for_vad)}.wav")
+                if current_all_chunks_for_vad.numel() > 0 :
+                     self.save_tensor_to_wav(current_all_chunks_for_vad, self.SAMPLING_RATE, vad_input_filename)
+                     logger.info(f"Saved VAD pass input buffer to: {vad_input_filename}")
+            except Exception as save_e:
+                logger.error(f"Failed to save VAD pass input buffer debug audio: {save_e}", exc_info=True)
+
+        return final_segments_for_asr # List of dicts: {'start': X, 'end': Y} or {'start': X, 'immediate': Y}
+
 
     async def recv_audio_bytes(self, new_chunk, language_code):
         # ... (implementation as you provided, with normalization) ...
@@ -263,9 +597,6 @@ class TranscriptionServer:
             logger.debug("No new speech segments detected by VAD this pass.")
             return None
         
-        # +++ REINSTATE DEBUG SAVING for "to_website" (entire current buffer for VAD) +++
-        # This saves the `current_all_chunks_for_vad` which is `self.all_chunks.clone()` at this point.
-        # It represents the total audio buffer the VAD decisions below are based on for this pass.
         try:
             debug_audio_dir_vad_input = "debug_audio_vad_input" # New directory for clarity
             if not os.path.exists(debug_audio_dir_vad_input):

@@ -16,6 +16,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('SttServer')
 
+
 class Listener(stt__pb2__grpc.ListenerServicer):
     def __init__(self, project, location, recognizer_id_arg: str) -> None:
         super().__init__()
@@ -23,93 +24,94 @@ class Listener(stt__pb2__grpc.ListenerServicer):
         self.location = location
         self.recognizer_id = recognizer_id_arg
         logger.info(f"[Listener] Initialized with project='{project}', location='{location}', recognizer_id='{recognizer_id_arg}'")
+        self.transcription_server_instance = None # Will be created per call
 
     async def DoSpeechToText(self, request_iterator, context: grpc.aio.ServicerContext):
-        logger.info("[Listener] New DoSpeechToText call received. Creating new TranscriptionServer instance.")
+        logger.info("[Listener] New DoSpeechToText call received.")
+        
+        # Determine language_code from the first request for TranscriptionServer initialization
+        # This assumes language_code and TTS pref don't change mid-stream.
+        # If they can, this logic needs adjustment.
+        first_request = None
+        try:
+            first_request = await request_iterator.__anext__()
+        except StopAsyncIteration:
+            logger.info("[Listener] Request iterator was empty.")
+            return
+        
+        language_code = first_request.config.streaming_config.config.language_codes[0]
+        client_wants_tts = True # Default
+        if first_request.config and first_request.config.streaming_config and first_request.config.streaming_config.config:
+            if hasattr(first_request.config.streaming_config.config, 'enable_tts'):
+                client_wants_tts = first_request.config.streaming_config.config.enable_tts
+
         transcription_server_instance = TranscriptionServer(
             project_id=self.project,
             location=self.location,
-            recognizer_id_str=self.recognizer_id
+            recognizer_id_str=self.recognizer_id,
+            language_code=language_code # Pass language_code to TranscriptionServer
         )
-        logger.info("[Listener] TranscriptionServer instance created for this call.")
+        transcription_server_instance.start_processing_pipeline()
+        logger.info(f"[Listener] TranscriptionServer instance created and pipeline started for lang '{language_code}', TTS pref: {client_wants_tts}")
 
-        # Default TTS preference if not specified in the very first request (though it should be)
-        # This is important because config is per-chunk in your proto.
-        client_wants_tts = True # Default to True if not specified
+        async def audio_feeder():
+            """Feeds audio from gRPC request_iterator to TranscriptionServer's input queue."""
+            try:
+                # Process the first chunk already read
+                await transcription_server_instance.submit_audio_chunk(first_request.content.audio)
 
+                async for stt_request in request_iterator:
+                    if transcription_server_instance._stop_event.is_set(): break
+                    await transcription_server_instance.submit_audio_chunk(stt_request.content.audio)
+                logger.info("[Listener] Audio feeder: All audio chunks submitted.")
+            except grpc.aio.AioRpcError as e: # Catch gRPC specific errors like client cancelling stream
+                logger.warning(f"[Listener] Audio feeder: gRPC error in request stream: {e.code()} - {e.details()}")
+            except Exception as e:
+                logger.error(f"[Listener] Audio feeder: Error: {e}", exc_info=True)
+            finally:
+                # Signal end of audio to the pipeline
+                await transcription_server_instance.submit_audio_chunk(None) 
+                logger.info("[Listener] Audio feeder: Sent None sentinel to TranscriptionServer.")
+        
+        feeder_task = asyncio.create_task(audio_feeder())
+        
         try:
-            async for stt_request in request_iterator:
-                audio_chunk = stt_request.content.audio
-                
-                # --- Read TTS Preference from Request Config ---
-                # Path: stt_request.config.streaming_config.config.enable_tts
-                if stt_request.config and \
-                   stt_request.config.streaming_config and \
-                   stt_request.config.streaming_config.config:
-                    # Check if the field exists, good practice after proto changes
-                    if hasattr(stt_request.config.streaming_config.config, 'enable_tts'):
-                        client_wants_tts = stt_request.config.streaming_config.config.enable_tts
-                        logger.debug(f"[Listener] Client TTS preference received: {client_wants_tts}")
-                    else:
-                        logger.warning("[Listener] 'enable_tts' field not found in RecognitionConfig. Defaulting TTS preference.")
-                # --- End Read TTS Preference ---
-
-                language_code = stt_request.config.streaming_config.config.language_codes[0]
-                logger.debug(f"[Listener] Processing chunk for lang '{language_code}', size {len(audio_chunk)}, TTS Pref: {client_wants_tts}")
-
-                response_proto = await transcription_server_instance.recv_audio_bytes(audio_chunk, language_code)
-
-                if response_proto:
-                    if response_proto.results:
-                        for result_item in response_proto.results:
-                            if result_item.is_final and result_item.alternatives:
-                                alt = result_item.alternatives[0]
-                                
-                                # Initialize tts_duration_ms for the proto field
-                                current_tts_duration_ms = 0
-
-                                # Check if translation exists AND client wants TTS AND audio not already synthesized
-                                if client_wants_tts and alt.translation and \
-                                   (not hasattr(alt, 'synthesized_speech_audio') or not alt.synthesized_speech_audio):
-                                    
-                                    logger.info(f"[Listener] Client wants TTS. Final translation for TTS: '{alt.translation}'")
-                                    
-                                    tts_start_time = time.perf_counter()
-                                    tts_mp3_response = text2speech(alt.translation)
-                                    tts_end_time = time.perf_counter()
-                                    current_tts_duration_ms = int((tts_end_time - tts_start_time) * 1000)
-                                    
-                                    if tts_mp3_response and tts_mp3_response.audio_content:
-                                        logger.info(f"[Listener] TTS generated MP3 audio, length: {len(tts_mp3_response.audio_content)}, duration: {current_tts_duration_ms:.2f} ms")
-                                        # Ensure fields exist on 'alt' before assignment (good after proto changes)
-                                        if hasattr(alt, 'synthesized_speech_audio'):
-                                            alt.synthesized_speech_audio = tts_mp3_response.audio_content
-                                        if hasattr(alt, 'tts_duration_ms'):
-                                            alt.tts_duration_ms = current_tts_duration_ms
-                                    else:
-                                        logger.warning(f"[Listener] TTS for '{alt.translation}' failed or produced no audio. TTS attempt duration: {current_tts_duration_ms:.2f} ms")
-                                        if hasattr(alt, 'tts_duration_ms'):
-                                             alt.tts_duration_ms = current_tts_duration_ms # Log attempt duration even on failure
-                                
-                                elif not client_wants_tts and alt.translation:
-                                    logger.info(f"[Listener] Client has TTS disabled. Skipping TTS for translation: '{alt.translation}'")
-                                    if hasattr(alt, 'tts_duration_ms'):
-                                        alt.tts_duration_ms = 0 # Explicitly set to 0 if TTS skipped
-                                elif alt.translation and hasattr(alt, 'synthesized_speech_audio') and alt.synthesized_speech_audio:
-                                    logger.debug(f"[Listener] TTS audio already present for translation: '{alt.translation}'")
-                                    # If tts_duration_ms wasn't set when audio was added, it might be 0 here.
-                                    # This assumes if synthesized_speech_audio is present, tts_duration_ms was also handled.
-                                elif not alt.translation:
-                                     logger.debug("[Listener] No translation available for TTS.")
-
+            async for response_proto in transcription_server_instance.get_ordered_results():
+                if response_proto and response_proto.results:
+                    # TTS logic for results coming from transcription_server_instance
+                    for result_item in response_proto.results:
+                        if result_item.is_final and result_item.alternatives:
+                            alt = result_item.alternatives[0]
+                            current_tts_duration_ms = 0
+                            if client_wants_tts and alt.translation and \
+                               (not hasattr(alt, 'synthesized_speech_audio') or not alt.synthesized_speech_audio):
+                                logger.info(f"[Listener] Client wants TTS. Final translation for TTS: '{alt.translation}'")
+                                tts_start_time = time.perf_counter()
+                                # text2speech should ideally be async or run in executor to not block this result loop
+                                # For simplicity, keeping it sync as per user's code for now.
+                                tts_mp3_response = text2speech(alt.translation) 
+                                tts_end_time = time.perf_counter()
+                                current_tts_duration_ms = int((tts_end_time - tts_start_time) * 1000)
+                                if tts_mp3_response and tts_mp3_response.audio_content:
+                                    alt.synthesized_speech_audio = tts_mp3_response.audio_content
+                                if hasattr(alt, 'tts_duration_ms'): alt.tts_duration_ms = current_tts_duration_ms
+                            elif not client_wants_tts and alt.translation:
+                                if hasattr(alt, 'tts_duration_ms'): alt.tts_duration_ms = 0
                     yield response_proto
-                else:
-                    logger.debug("[Listener] recv_audio_bytes from TranscriptionServer returned None for this chunk.")
+                elif response_proto is None and transcription_server_instance._stop_event.is_set(): # Explicit break if needed
+                     break
         except Exception as e:
-            logger.error(f"[Listener] Error during DoSpeechToText stream processing: {e}", exc_info=True)
+            logger.error(f"[Listener] Error consuming results from TranscriptionServer: {e}", exc_info=True)
+            # context.abort(grpc.StatusCode.INTERNAL, "Error processing results") # Option
             raise
+        finally:
+            logger.info("[Listener] Result consumption loop finished. Cleaning up.")
+            await transcription_server_instance.stop_processing_pipeline()
+            if feeder_task and not feeder_task.done():
+                feeder_task.cancel()
+            logger.info("[Listener] DoSpeechToText call ended.")
 
-# ... (serve function remains the same as your provided version) ...
+
 async def serve(port, project, location, recognizer_id_arg: str):
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=20))
     stt__pb2__grpc.add_ListenerServicer_to_server(
